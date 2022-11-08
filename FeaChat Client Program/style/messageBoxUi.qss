@@ -1,0 +1,40 @@
+QPushButton#closeButton{
+    font-family: "Microsoft YaHei";
+    font-size: 25px;
+    color: #727272;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#closeButton:hover{
+    background-color: #e1e1e1;}
+
+QPushButton#closeButton:pressed{
+    background-color: #c9c9c9;}
+
+QPushButton#confirmButton{
+    font-family: "Microsoft YaHei";
+    font-size: 18px;
+    color: #ffffff;
+    background-color: #0089ff;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#confirmButton:hover{
+    background-color: #39a3ff;}
+
+QPushButton#confirmButton:pressed{
+    background-color: #0065d5;}
+
+QPushButton#cancelButton{
+    font-family: "Microsoft YaHei";
+    font-size: 18px;
+    color: #212121;
+    background-color: #e5e5e5;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#cancelButton:hover{
+    background-color: #d5d5d5;}
+
+QPushButton#cancelButton:pressed{
+    background-color: #c5c5c5;}
