@@ -1,0 +1,436 @@
+QComboBox QAbstractItemView{
+    border: none;}
+
+QLabel#titleArea{
+    background-color: #0076f6;
+    border-radius: 10px;}
+
+QLabel#loginArea{
+    background-color: #ffffff;
+    border-radius: 10px;}
+
+QLabel#promptSucceededArea{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #000000;
+    background-color: #d3ffda;
+    border-radius: 10px;}
+
+QLabel#promptErrorArea{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #000000;
+    background-color: #ffdfdf;
+    border-radius: 10px;}
+
+QLabel#titleFilling{
+    background-color: #0076f6;
+    border-radius: 10px;}
+
+QLabel#loginFilling{
+    background-color: #ffffff;
+    border-radius: 10px;}
+
+QLabel#promptSucceededFilling{
+    background-color: #d3ffda;}
+
+QLabel#promptErrorFilling{
+    background-color: #ffdfdf;}
+
+QLabel#titleText{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #ffffff;
+    background-color: transparent;}
+
+QPushButton#closeButton{
+    font-family: "Microsoft YaHei";
+    font-size: 30px;
+    color: #ffffff;
+    background-color: transparent;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#closeButton:hover{
+    background-color: #298cf7;}
+
+QPushButton#closeButton:pressed{
+    background-color: #4b9ef8;}
+
+QPushButton#minButton{
+    font-family: "Microsoft YaHei";
+    font-size: 35px;
+    color: #ffffff;
+    background-color: transparent;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#minButton:hover{
+    background-color: #298cf7;}
+
+QPushButton#minButton:pressed{
+    background-color: #4b9ef8;}
+
+/*loginPage*/
+
+QLabel#loginPage-loginHint{
+    font-family: "Microsoft YaHei";
+    font-size: 30px;
+    color: #212121;
+    background-color: transparent;
+    border-radius: 10px;}
+
+QComboBox#loginPage-numberEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QComboBox#loginPage-numberEdit::drop-down{
+    width: 60px;
+    height: 60px;
+    border: none;}
+
+QComboBox#loginPage-numberEdit::down-arrow{
+    border-image: url(pic/loginUi/loginPage/numberEdit/normal.png);
+    width: 60px;
+    height: 60px;}
+
+QComboBox#loginPage-numberEdit::down-arrow:hover{
+    border-image: url(pic/loginUi/loginPage/numberEdit/hover.png);}
+
+QComboBox#loginPage-numberEdit::down-arrow:pressed{
+    border-image: url(pic/loginUi/loginPage/numberEdit/pressed.png);}
+
+QLineEdit#loginPage-passwordEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 60px 0px 20px;}
+
+QPushButton#loginPage-hidePasswordButton{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/unchecked/normal.png);}
+
+QPushButton#loginPage-hidePasswordButton:hover{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/unchecked/hover.png);}
+
+QPushButton#loginPage-hidePasswordButton:pressed{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/unchecked/pressed.png);}
+
+QPushButton#loginPage-hidePasswordButton:checked{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/checked/normal.png);}
+
+QPushButton#loginPage-hidePasswordButton:checked:hover{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/checked/hover.png);}
+
+QPushButton#loginPage-hidePasswordButton:checked:pressed{
+    border-image: url(pic/loginUi/loginPage/hidePasswordButton/checked/pressed.png);}
+
+QPushButton#loginPage-loginButton{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #ffffff;
+    background-color: #0089ff;
+    border: 0px;
+    border-radius: 10px;}
+
+QPushButton#loginPage-loginButton:hover{
+    background-color: #39a3ff;}
+
+QPushButton#loginPage-loginButton:pressed{
+    background-color: #0065d5;}
+
+
+QCheckBox#loginPage-rememberPasswordButton{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #999999;}
+
+QCheckBox#loginPage-rememberPasswordButton::indicator{
+    width: 15px;
+    height: 15px;}
+
+QCheckBox#loginPage-rememberPasswordButton:hover{
+    color: #777777;}
+
+QCheckBox#loginPage-rememberPasswordButton:pressed{
+    color: #555555;}
+
+QPushButton#loginPage-switchRegisterButton{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #999999;
+    background-color: transparent;
+    border: 0px;}
+
+QPushButton#loginPage-switchRegisterButton:hover{
+    color: #777777;}
+
+QPushButton#loginPage-switchRegisterButton:pressed{
+    color: #555555;}
+
+/*registerPage*/
+
+QLabel#registerPage-switchPageArea{
+background-color: #ebebeb;}
+
+QLabel#registerPage-switchPageSlider{
+background-color: #0076f6;}
+
+QPushButton#registerPage-switchUserInfoButton{
+font-family: "Microsoft YaHei";
+font-size: 15px;
+color: #999999;
+background-color: transparent;
+border:0px;}
+
+QPushButton#registerPage-switchUserInfoButton:checked{
+color: #212121;}
+
+QPushButton#registerPage-switchAccountInfoButton{
+font-family: "Microsoft YaHei";
+font-size: 15px;
+color: #999999;
+background-color: transparent;
+border:0px;}
+
+QPushButton#registerPage-switchAccountInfoButton:checked{
+color: #212121;}
+
+QPushButton#registerPage-registerButton{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #ffffff;
+    background-color: #0089ff;
+    border: 0px;
+    border-radius: 10px;}
+
+QPushButton#registerPage-registerButton:hover{
+    background-color: #39a3ff;}
+
+QPushButton#registerPage-registerButton:pressed{
+    background-color: #0065d5;}
+
+QPushButton#registerPage-switchLoginButton{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #999999;
+    background-color: transparent;
+    border: 0px;}
+
+QPushButton#registerPage-switchLoginButton:hover{
+    color: #777777;}
+
+QPushButton#registerPage-switchLoginButton:pressed{
+    color: #555555;}
+
+QLineEdit#registerPage-userInfoPage-nicknameEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QDateEdit#registerPage-userInfoPage-birthEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    outline: none;
+    border: 10px;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::up-button{
+    border-image: url(pic/loginUi/registerPage/birthEdit/up/normal.png);
+    width: 60px;
+    height: 30px;}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::up-button:hover{
+    border-image: url(pic/loginUi/registerPage/birthEdit/up/hover.png);}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::up-button:pressed{
+    border-image: url(pic/loginUi/registerPage/birthEdit/up/pressed.png);}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::down-button{
+    border-image: url(pic/loginUi/registerPage/birthEdit/down/normal.png);
+    width: 60px;
+    height: 30px;}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::down-button:hover{
+    border-image: url(pic/loginUi/registerPage/birthEdit/down/hover.png);}
+
+QDateEdit#registerPage-userInfoPage-birthEdit::down-button:pressed{
+    border-image: url(pic/loginUi/registerPage/birthEdit/down/pressed.png);}
+
+QComboBox#registerPage-userInfoPage-genderEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    outline: none;
+    border: 10px;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QComboBox#registerPage-userInfoPage-genderEdit::drop-down{
+    width: 60px;
+    height: 60px;
+    border: none;}
+
+QComboBox#registerPage-userInfoPage-genderEdit::down-arrow{
+    border-image: url(pic/loginUi/registerPage/genderEdit/normal.png);
+    width: 60px;
+    height: 60px;}
+
+QComboBox#registerPage-userInfoPage-genderEdit::down-arrow:hover{
+    border-image: url(pic/loginUi/registerPage/genderEdit/hover.png);}
+
+QComboBox#registerPage-userInfoPage-genderEdit::down-arrow:pressed{
+    border-image: url(pic/loginUi/registerPage/genderEdit/pressed.png);}
+
+QLabel#registerPage-userInfoPage-genderEditItem-genderShow{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+}
+
+QLineEdit#registerPage-accountInfoPage-numberEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #000000;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QLineEdit#registerPage-accountInfoPage-passwordEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #000000;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QLineEdit#registerPage-accountInfoPage-emailEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #000000;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 20px 0px 20px;}
+
+QLineEdit#registerPage-accountInfoPage-codeEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #000000;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 60px 0px 20px;}
+
+QPushButton#registerPage-accountInfoPage-sendCodeButton{
+    border-image: url(pic/loginUi/registerPage/sendCodeButton/normal.png);}
+
+QPushButton#registerPage-accountInfoPage-sendCodeButton:hover{
+    border-image: url(pic/loginUi/registerPage/sendCodeButton/hover.png);}
+
+QPushButton#registerPage-accountInfoPage-sendCodeButton:pressed{
+    border-image: url(pic/loginUi/registerPage/sendCodeButton/pressed.png);}
+
+/*removeAccountPage*/
+
+QRadioButton#removeAccountPage-option1{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;}
+
+QRadioButton#removeAccountPage-option2{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;}
+
+QPushButton#removeAccountPage-confirmButton{
+    font-family: "Microsoft YaHei";
+    font-size: 18px;
+    color: #ffffff;
+    background-color: #0089ff;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#removeAccountPage-confirmButton:hover{
+    background-color: #39a3ff;}
+
+QPushButton#removeAccountPage-confirmButton:pressed{
+    background-color: #0065d5;}
+
+QPushButton#removeAccountPage-cancelButton{
+    font-family: "Microsoft YaHei";
+    font-size: 18px;
+    color: #212121;
+    background-color: #e5e5e5;
+    border: 0px;
+    border-radius: 5px;}
+
+QPushButton#removeAccountPage-cancelButton:hover{
+    background-color: #d5d5d5;}
+
+QPushButton#removeAccountPage-cancelButton:pressed{
+    background-color: #c5c5c5;}
+
+/*verifyPage*/
+
+QLineEdit#verifyPage-codeEdit{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #212121;
+    background-color: #ebebeb;
+    border: none;
+    border-radius: 10px;
+    padding: 0px 60px 0px 20px;}
+
+QPushButton#verifyPage-sendCodeButton{
+    border-image: url(pic/loginUi/verifyPage/sendCodeButton/normal.png);}
+
+QPushButton#verifyPage-sendCodeButton:hover{
+    border-image: url(pic/loginUi/verifyPage/sendCodeButton/hover.png);}
+
+QPushButton#verifyPage-sendCodeButton:pressed{
+    border-image: url(pic/loginUi/verifyPage/sendCodeButton/pressed.png);}
+
+QPushButton#verifyPage-verifyButton{
+    font-family: "Microsoft YaHei";
+    font-size: 20px;
+    color: #ffffff;
+    background-color: #0089ff;
+    border: 0px;
+    border-radius: 10px;}
+
+QPushButton#verifyPage-verifyButton:hover{
+    background-color: #39a3ff;}
+
+QPushButton#verifyPage-verifyButton:pressed{
+    background-color: #0065d5;}
+
+QPushButton#verifyPage-switchLoginButton{
+    font-family: "Microsoft YaHei";
+    font-size: 15px;
+    color: #999999;
+    background-color: transparent;
+    border: 0px;}
+
+QPushButton#verifyPage-switchLoginButton:hover{
+    color: #777777;}
+
+QPushButton#verifyPage-switchLoginButton:pressed{
+    color: #555555;}
