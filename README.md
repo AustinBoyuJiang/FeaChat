@@ -1,4 +1,4 @@
 # FeaChat
- A social media software developed by my own with Python language
+ FeaChat is social media software I developed using Python.
 
 ![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/main/feachat.png?raw=true)
