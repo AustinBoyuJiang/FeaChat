@@ -1,5 +1,5 @@
 # FeaChat
-FeaChat is the firs chat app I developed using Python.
+FeaChat is the first chat app I developed using Python.
 
 ## /server/
 
