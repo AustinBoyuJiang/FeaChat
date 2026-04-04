@@ -120,8 +120,22 @@ class feachatUi:
         result.putalpha(mask)
         return result
 
+    # 各本地数据文件的默认值
+    _LOCAL_DEFAULTS = {
+        "user info": {},
+        "login history": {},
+        "remember password": False,
+        "messages": {},
+    }
+
     def readLocalData(self, name):
-        file = open("data/local/%s.fct" % name, "r")
+        path = "data/local/%s.fct" % name
+        if not os.path.exists(path):
+            os.makedirs("data/local", exist_ok=True)
+            default = self._LOCAL_DEFAULTS.get(name, {})
+            self.writeLocalData(name, default)
+            return default
+        file = open(path, "r")
         data = eval(file.read())
         file.close()
         return data
