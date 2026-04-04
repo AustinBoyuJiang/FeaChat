@@ -1,5 +1,6 @@
 # FeaChat
-FeaChat is the first chat app I developed using Python.
+
+FeaChat is the first chat application I developed using Python. One funny thing I did was writing all 3000+ lines of code in a single file. You can review it in ./client/old/client.pyw. This is a record of my progress.
 
 ## /server/
 
