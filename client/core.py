@@ -13,7 +13,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-DEV_MODE = False
+DEV_MODE = True
 
 DEV_MOCK_USERS = {
     "alice": ["Alice",    "dev_avatar", "dev_bg", "1995-03-12", "Girl", "Hello, I'm Alice!"],

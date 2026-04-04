@@ -23,4 +23,7 @@ DEV_MODE = True/False
 
 
 
-![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/main/feachat.png?raw=true)
+![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/master/demo/img/1.png)
+![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/master/demo/img/2.png)
+![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/master/demo/img/3.png)
+![FeaChat](https://github.com/AustinBoyuJiang/FeaChat/blob/master/demo/img/4.png)

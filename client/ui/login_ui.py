@@ -200,7 +200,7 @@ class loginUi(QWidget):
             if DEV_MODE:
                 from core import DEV_MOCK_USERS, DEV_MOCK_MESSAGES, _setup_dev_assets
                 _setup_dev_assets()
-                account = self.parent.number or "alice"
+                account = "alice"  # DEV_MODE 固定用 alice 匹配 mock 数据
                 core.feachat.account = account
                 core.feachat.user_info = dict(DEV_MOCK_USERS)
                 if account not in core.feachat.user_info:
@@ -222,7 +222,9 @@ class loginUi(QWidget):
             self.rememberPasswordButton.setEnabled(False)
             self.switchRegisterButton.setEnabled(False)
             core.feachat.number = self.parent.number
-            core.feachat.account = self.parent.number
+            # DEV_MODE 下 account 已在 login() 裡設置，不覆蓋
+            if not DEV_MODE:
+                core.feachat.account = self.parent.number
             core.feachat.password = self.parent.password
             QTimer.singleShot(1000, self.openChatWindow)
 

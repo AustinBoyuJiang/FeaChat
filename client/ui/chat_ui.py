@@ -654,6 +654,7 @@ class chatUi(QWidget):
         def addBox(self, message_info, index):
             account = core.feachat.account
             msg = message_info[index]
+            print(f"[addBox] account={account!r}, sender={msg[1]!r}, match={msg[1]==account}")
             item = QListWidgetItem()
             if msg[4] == "text":
                 self.insertItem(0, item)
