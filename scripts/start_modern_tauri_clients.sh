@@ -83,7 +83,7 @@ rm -rf "$ROOT/desktop-client/src-tauri/target/debug/feachat.dSYM"
 find "$ROOT/desktop-client/src-tauri/target/debug/deps" -maxdepth 1 -name 'feachat*' -delete 2>/dev/null || true
 find "$ROOT/desktop-client/src-tauri/target/debug/incremental" -maxdepth 1 -name 'feachat*' -exec rm -rf {} + 2>/dev/null || true
 screen -dmS feachat-vite bash -lc "cd '$ROOT/desktop-client' && npm run dev > '$LOG_DIR/modern-client.log' 2>&1"
-echo "Started Vite client on http://127.0.0.1:1420"
+echo "Started Vite client on http://localhost:1420"
 wait_for_port 1420 "Vite client"
 
 screen -dmS feachat-alice bash -lc "cd '$ROOT/desktop-client' && FEACHAT_WINDOW_LABEL=alice FEACHAT_AUTO_LOGIN_NUMBER=alice1 FEACHAT_AUTO_LOGIN_PASSWORD=secret1 FEACHAT_AUTO_LOGIN_NICKNAME=Alice FEACHAT_AUTO_LOGIN_EMAIL=alice1@example.com npm run tauri dev > '$LOG_DIR/tauri-alice.log' 2>&1"

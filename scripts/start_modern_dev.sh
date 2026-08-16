@@ -26,15 +26,15 @@ fi
 cd "$ROOT/desktop-client"
 if ! lsof -iTCP:1420 -sTCP:LISTEN >/dev/null 2>&1; then
   npm run dev >"$LOG_DIR/modern-client.log" 2>&1 &
-  echo "Started Vite client on http://127.0.0.1:1420"
+  echo "Started Vite client on http://localhost:1420"
 else
   echo "Vite client already appears to be listening on port 1420"
 fi
 
 sleep 2
 
-ALICE_URL="http://127.0.0.1:1420/?autoLogin=1&number=alice1&password=secret1"
-BOB_URL="http://127.0.0.1:1420/?autoLogin=1&number=bob001&password=secret1"
+ALICE_URL="http://localhost:1420/?autoLogin=1&number=alice1&password=secret1"
+BOB_URL="http://localhost:1420/?autoLogin=1&number=bob001&password=secret1"
 
 if command -v open >/dev/null 2>&1; then
   open -na "Google Chrome" --args --user-data-dir="/tmp/feachat-modern-alice" "$ALICE_URL" >/dev/null 2>&1 || open "$ALICE_URL"
@@ -47,4 +47,3 @@ fi
 echo "Logs:"
 echo "  $LOG_DIR/modern-server.log"
 echo "  $LOG_DIR/modern-client.log"
-

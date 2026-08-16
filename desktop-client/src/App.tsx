@@ -3,6 +3,7 @@ import {
   Aperture,
   Check,
   CircleUserRound,
+  Download,
   FileText,
   Image as ImageIcon,
   Menu,
@@ -13,25 +14,58 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Phone,
+  PhoneOff,
   Plus,
   Search,
   Send,
   Settings,
   UserPlus,
+  Video,
   X
 } from "lucide-react";
 
 import { api } from "./api";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   clearCachedMessages,
   mergeCachedMessages,
+  readMutedPeers,
   readCachedMessages,
+  readUnreadCounts,
   readTheme,
   writeCachedMessages,
+  writeMutedPeers,
+  writeUnreadCounts,
   writeTheme,
   type Theme
 } from "./cache";
+import { WindowControls } from "./components/WindowControls";
+import {
+  formatBytes,
+  formatCallMessage,
+  formatMessageTimestamp,
+  isImageMessage,
+  messagePreview,
+  parseCallMessage,
+  parseMessageTime,
+  parseGroupInviteMessage,
+  sortMessages,
+  shouldShowTimestamp,
+  uniqueMessages
+} from "./lib/messages";
+import { setDockUnreadBadge } from "./lib/dockBadge";
+import { playIncomingMessageSound, startIncomingCallRingtone, stopIncomingCallRingtone } from "./lib/sounds";
+import { startWindowDrag, toggleMaximizeFromDragArea } from "./lib/window";
+import {
+  contactGroupKey,
+  conversationTitle,
+  displayName,
+  genderMarker,
+  GroupAvatar,
+  groupTitle,
+  UserAvatar,
+  userAvatarSrc
+} from "./lib/user";
 import type { Conversation, FriendRequest, FriendRequestRecord, GroupInvite, Message, User } from "./types";
 
 type AuthMode = "login" | "register";
@@ -40,6 +74,18 @@ type ProfileRelation = "self" | "friend" | "stranger";
 type ContactPickerMode = "createGroup" | "inviteGroup" | "kickGroup";
 type InlineEditTarget = "profileAlias" | "profileTags" | "groupAlias" | "groupName";
 type SettingsSection = "account" | "appearance";
+type ChatListItem = { kind: "group"; conversation: Conversation } | { kind: "direct"; friend: User };
+type CallMode = "voice" | "video";
+type CallSignal =
+  | { kind: "offer"; mode: CallMode; description: RTCSessionDescriptionInit }
+  | { kind: "answer"; description: RTCSessionDescriptionInit }
+  | { kind: "ice"; candidate: RTCIceCandidateInit }
+  | { kind: "end" }
+  | { kind: "reject" };
+type CallState =
+  | { status: "idle" }
+  | { status: "incoming"; mode: CallMode; peerNumber: string; peerName: string; conversationId?: string }
+  | { status: "outgoing" | "connecting" | "active"; mode: CallMode; peerNumber: string; peerName: string; conversationId?: string };
 
 type ProfileCardState = {
   user: User;
@@ -54,209 +100,100 @@ const initialNumber = params.get("number") ?? "alice1";
 const initialPassword = params.get("password") ?? "secret1";
 const initialNickname = params.get("nickname") ?? (initialNumber === "bob001" ? "Bob" : "Alice");
 const initialEmail = params.get("email") ?? `${initialNumber}@example.com`;
-const MESSAGE_TIME_GAP_SECONDS = 300;
 const noTextAssist = {
   autoCapitalize: "none",
   autoCorrect: "off",
   spellCheck: false
 } as const;
+const LEGACY_CACHE_BRIDGE_URL = "http://127.0.0.1:1420/legacy-cache-bridge.html";
+const LEGACY_CACHE_ORIGIN = "http://127.0.0.1:1420";
 
-function displayName(user: User) {
-  return user.display_name || user.alias || user.nickname || user.number;
-}
-
-function letterAvatarSrc(label: string, color = "#0076f6") {
-  const letter = (label.trim().charAt(0) || "?").toUpperCase();
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><rect width="96" height="96" rx="12" fill="${color}"/><text x="48" y="58" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="42" font-weight="700" fill="#fff">${letter}</text></svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-function userAvatarSrc(user: User) {
-  return user.avatar_url ? api.fileUrl(user.avatar_url) : letterAvatarSrc(displayName(user), user.avatar_color || "#0076f6");
-}
-
-function groupTitle(conversation: Conversation) {
-  return conversation.title || conversation.members.map((member) => displayName(member)).join(", ") || "Group Chat";
-}
-
-function conversationTitle(conversation: Conversation) {
-  return conversation.type === "group" ? groupTitle(conversation) : conversation.peer ? displayName(conversation.peer) : conversation.title;
-}
-
-function UserAvatar({ user, className = "avatar small" }: { user: User; className?: string }) {
-  return <img className={className} src={userAvatarSrc(user)} alt="" draggable={false} />;
-}
-
-function GroupAvatar({ conversation, className = "avatar small group-avatar" }: { conversation: Conversation; className?: string }) {
-  const members = conversation.members.slice(0, 9);
-  const gridSize = members.length <= 1 ? 1 : members.length <= 4 ? 4 : 9;
-  return (
-    <span className={`${className} group-avatar-count-${gridSize}`} aria-hidden="true">
-      {members.map((member) => (
-        <img key={member.number} src={userAvatarSrc(member)} alt="" draggable={false} />
-      ))}
-    </span>
-  );
-}
-
-function genderMarker(user: User) {
-  if (user.gender === "female") {
-    return { label: "Female", symbol: "♀", className: "female" };
+function migrateLegacyLocalCache(onMigrated: () => void) {
+  if (window.location.hostname !== "localhost") {
+    return () => undefined;
   }
-  if (user.gender === "male") {
-    return { label: "Male", symbol: "♂", className: "male" };
-  }
-  return null;
-}
+  const iframe = document.createElement("iframe");
+  iframe.src = LEGACY_CACHE_BRIDGE_URL;
+  iframe.title = "Legacy cache migration";
+  iframe.style.display = "none";
 
-function uniqueMessages(messages: Message[]) {
-  const seen = new Set<number>();
-  return messages.filter((message) => {
-    if (seen.has(message.id)) {
+  const cleanup = () => {
+    window.removeEventListener("message", handleMessage);
+    iframe.remove();
+  };
+  const timer = window.setTimeout(cleanup, 2500);
+  function importLegacyValue(key: string, value: string | null) {
+    if (value === null || !key.startsWith("feachat.")) {
       return false;
     }
-    seen.add(message.id);
-    return true;
-  });
-}
-
-function parseMessageTime(value: string) {
-  const normalized = value.includes("T") ? value : value.replace(" ", "T");
-  const withZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`;
-  const date = new Date(withZone);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
-}
-
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function startOfWeek(date: Date) {
-  const day = date.getDay() || 7;
-  const weekStart = startOfDay(date);
-  weekStart.setDate(weekStart.getDate() - day + 1);
-  return weekStart;
-}
-
-function formatClock(date: Date) {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatMessageTimestamp(value: string) {
-  const date = parseMessageTime(value);
-  const now = new Date();
-  const today = startOfDay(now);
-  const target = startOfDay(date);
-  const dayDiff = Math.round((today.getTime() - target.getTime()) / 86_400_000);
-  const clock = formatClock(date);
-
-  if (dayDiff === 0) {
-    return clock;
-  }
-  if (dayDiff === 1) {
-    return `Yesterday ${clock}`;
-  }
-  if (dayDiff > 1 && startOfWeek(date).getTime() === startOfWeek(now).getTime()) {
-    return `${date.toLocaleDateString([], { weekday: "long" })} ${clock}`;
-  }
-  if (date.getFullYear() === now.getFullYear()) {
-    return `${date.getMonth() + 1}/${date.getDate()} ${clock}`;
-  }
-  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${clock}`;
-}
-
-function shouldShowTimestamp(messages: Message[], index: number) {
-  if (index === 0) {
+    const currentValue = localStorage.getItem(key);
+    if (key.startsWith("feachat.cache.") && currentValue) {
+      try {
+        const legacyCache = JSON.parse(value) as { theme?: Theme; conversations?: Record<string, unknown> };
+        const currentCache = JSON.parse(currentValue) as { theme?: Theme; conversations?: Record<string, unknown> };
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            ...legacyCache,
+            ...currentCache,
+            theme: legacyCache.theme ?? currentCache.theme,
+            conversations: {
+              ...(legacyCache.conversations ?? {}),
+              ...(currentCache.conversations ?? {})
+            }
+          })
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (key.startsWith("feachat.theme.")) {
+      const number = key.replace("feachat.theme.", "");
+      const cacheKey = `feachat.cache.${number}`;
+      const cacheValue = localStorage.getItem(cacheKey);
+      if (cacheValue && (value === "classic" || value === "dark")) {
+        try {
+          const cache = JSON.parse(cacheValue) as { theme?: Theme };
+          localStorage.setItem(cacheKey, JSON.stringify({ ...cache, theme: value }));
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    }
+    if (currentValue !== null) {
+      return false;
+    }
+    localStorage.setItem(key, value);
     return true;
   }
-  const current = parseMessageTime(messages[index].time).getTime();
-  const previous = parseMessageTime(messages[index - 1].time).getTime();
-  return current - previous >= MESSAGE_TIME_GAP_SECONDS * 1000;
-}
 
-function sortMessages(messages: Message[]) {
-  return [...messages].sort((a, b) => {
-    const byTime = parseMessageTime(a.time).getTime() - parseMessageTime(b.time).getTime();
-    return byTime === 0 ? a.id - b.id : byTime;
-  });
-}
-
-function formatBytes(size: number) {
-  if (size < 1024) {
-    return `${size} B`;
+  function handleMessage(event: MessageEvent) {
+    if (event.origin !== LEGACY_CACHE_ORIGIN) {
+      return;
+    }
+    const data = event.data as { source?: string; values?: Record<string, string> };
+    if (data.source !== "feachat-legacy-cache" || !data.values) {
+      return;
+    }
+    let changed = false;
+    for (const [key, value] of Object.entries(data.values)) {
+      changed = importLegacyValue(key, value) || changed;
+    }
+    if (changed) {
+      onMigrated();
+    }
+    window.clearTimeout(timer);
+    cleanup();
   }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
 
-function messagePreview(message: Message) {
-  if (message.type === "group_invite") {
-    return "[Group Invite]";
-  }
-  if (message.attachment) {
-    return message.type === "image" ? `[Image] ${message.attachment.name}` : `[File] ${message.attachment.name}`;
-  }
-  return message.message || "[Message]";
-}
-
-function parseGroupInviteMessage(message: Message) {
-  if (message.type !== "group_invite") {
-    return null;
-  }
-  try {
-    return JSON.parse(message.message) as { invite_id: number; conversation_id: string; title: string; inviter: string };
-  } catch {
-    return null;
-  }
-}
-
-function contactGroupKey(user: User) {
-  const first = displayName(user).trim().charAt(0).toUpperCase();
-  return /^[A-Z]$/.test(first) ? first : "Others";
-}
-
-function readMutedPeers(number: string) {
-  const raw = localStorage.getItem(`feachat.muted.${number}`);
-  if (!raw) {
-    return new Set<string>();
-  }
-  try {
-    return new Set(JSON.parse(raw) as string[]);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function writeMutedPeers(number: string, muted: Set<string>) {
-  localStorage.setItem(`feachat.muted.${number}`, JSON.stringify([...muted]));
-}
-
-function isImageMessage(message: Message) {
-  return message.type === "image" || message.attachment?.mime_type.startsWith("image/");
-}
-
-function startWindowDrag(event: MouseEvent<HTMLElement>) {
-  if (event.button !== 0) {
-    return;
-  }
-  if ((event.target as HTMLElement).closest("button, input, textarea, a")) {
-    return;
-  }
-  getCurrentWindow().startDragging().catch(() => undefined);
-}
-
-function minimizeWindow() {
-  getCurrentWindow().minimize().catch(() => undefined);
-}
-
-function toggleMaximizeWindow() {
-  getCurrentWindow().toggleMaximize().catch(() => undefined);
-}
-
-function closeWindow() {
-  getCurrentWindow().close().catch(() => undefined);
+  window.addEventListener("message", handleMessage);
+  document.body.appendChild(iframe);
+  return () => {
+    window.clearTimeout(timer);
+    cleanup();
+  };
 }
 
 export default function App() {
@@ -300,9 +237,14 @@ export default function App() {
   const [profileStatus, setProfileStatus] = useState("");
   const [appMenuOpen, setAppMenuOpen] = useState(false);
   const [conversationMenuOpen, setConversationMenuOpen] = useState(false);
+  const [callMenuOpen, setCallMenuOpen] = useState(false);
+  const [callState, setCallState] = useState<CallState>({ status: "idle" });
+  const [callMediaVersion, setCallMediaVersion] = useState(0);
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [mutedPeers, setMutedPeers] = useState<Set<string>>(() => (me ? readMutedPeers(me.number) : new Set()));
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>(() => (me ? readUnreadCounts(me.number) : {}));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [accountNameDraft, setAccountNameDraft] = useState("");
@@ -316,27 +258,122 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [previewMessages, setPreviewMessages] = useState<Record<string, Message>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollBehaviorRef = useRef<ScrollBehavior>("auto");
+  const peerConnectionsRef = useRef<Record<string, RTCPeerConnection>>({});
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const callStateRef = useRef<CallState>({ status: "idle" });
+  const callStartedAtRef = useRef<number | null>(null);
+  const callRingtoneStopRef = useRef<(() => void) | null>(null);
+  const mutedPeersRef = useRef<Set<string>>(mutedPeers);
+  const incomingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  const pendingIceCandidatesRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const appMenuRef = useRef<HTMLDivElement | null>(null);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
+  const callMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedNumber = selected?.number;
   const selectedGroupId = selectedGroup?.id;
+
+  function latestMessage(messages: Array<Message | null | undefined>) {
+    return sortMessages(messages.filter((message): message is Message => Boolean(message))).at(-1) ?? null;
+  }
+
+  function replaceMessages(nextMessages: Message[], behavior: ScrollBehavior = "auto") {
+    scrollBehaviorRef.current = behavior;
+    setMessages(nextMessages);
+  }
+
+  function appendMessages(updater: (current: Message[]) => Message[], behavior: ScrollBehavior = "smooth") {
+    scrollBehaviorRef.current = behavior;
+    setMessages(updater);
+  }
+
+  function setPreviewMessage(key: string, message: Message | null) {
+    setPreviewMessages((current) => {
+      const next = { ...current };
+      if (message) {
+        next[key] = latestMessage([current[key], message]) ?? message;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }
+
+  function persistUnreadCounts(nextCounts: Record<string, number>) {
+    if (me?.number) {
+      writeUnreadCounts(me.number, nextCounts);
+    }
+  }
+
+  function incrementUnreadCount(key: string) {
+    setUnreadCounts((current) => {
+      const next = { ...current, [key]: Math.min((current[key] ?? 0) + 1, 999) };
+      persistUnreadCounts(next);
+      return next;
+    });
+  }
+
+  function clearUnreadCount(key: string) {
+    setUnreadCounts((current) => {
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      persistUnreadCounts(next);
+      return next;
+    });
+  }
+
+  function syncConversationPreviews(nextConversations: Conversation[], userNumber: string) {
+    const previewEntries = new Map<string, Message | null>();
+    for (const conversation of nextConversations) {
+      const key = conversation.type === "group" ? conversation.id : conversation.peer?.number;
+      if (!key) {
+        continue;
+      }
+      if (conversation.last_message) {
+        mergeCachedMessages(userNumber, key, [conversation.last_message]);
+      }
+      previewEntries.set(key, latestMessage(readCachedMessages(userNumber, key)));
+    }
+    setPreviewMessages((current) => {
+      const next = { ...current };
+      for (const [key, message] of previewEntries) {
+        if (message) {
+          next[key] = message;
+        } else {
+          delete next[key];
+        }
+      }
+      return next;
+    });
+  }
 
   function clearTransientUi() {
     setStatus("");
     setQuery("");
     setAddFriendOpen(false);
     setAddMenuOpen(false);
+    setCallMenuOpen(false);
     setAddQuery("");
     setAddSearchResults([]);
     setInlineEdit(null);
+    setConversationMenuOpen(false);
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
   }
 
-  async function loadContacts(activeToken = token) {
+  async function loadContacts(activeToken = token, activeUserNumber = me?.number) {
     if (!activeToken) {
       return;
     }
@@ -349,6 +386,9 @@ export default function App() {
     ]);
     setFriends(friendData.friends);
     setConversations(conversationData.conversations);
+    if (activeUserNumber) {
+      syncConversationPreviews(conversationData.conversations, activeUserNumber);
+    }
     setSelected((current) => friendData.friends.find((friend) => friend.number === current?.number) ?? current);
     setSelectedGroup((current) => conversationData.conversations.find((conversation) => conversation.id === current?.id) ?? current);
     setRequests(requestData.requests);
@@ -364,12 +404,14 @@ export default function App() {
     clearTransientUi();
     setSelected(peer);
     setSelectedGroup(null);
-    setMessages(readCachedMessages(me.number, peer.number));
+    clearUnreadCount(peer.number);
+    replaceMessages(readCachedMessages(me.number, peer.number), "auto");
     try {
       const response = await api.messages(token, peer.number);
       const nextMessages = uniqueMessages(response.messages);
       writeCachedMessages(me.number, peer.number, nextMessages);
-      setMessages(readCachedMessages(me.number, peer.number));
+      setPreviewMessage(peer.number, latestMessage(nextMessages));
+      replaceMessages(readCachedMessages(me.number, peer.number), "auto");
     } catch (error) {
       if (error instanceof Error && error.message === "Not authenticated") {
         logout();
@@ -387,14 +429,16 @@ export default function App() {
     clearTransientUi();
     setSelected(null);
     setSelectedGroup(group);
+    clearUnreadCount(group.id);
     setGroupAliasDraft(group.my_alias ?? "");
     setGroupRenameDraft(groupTitle(group));
-    setMessages(readCachedMessages(me.number, group.id));
+    replaceMessages(readCachedMessages(me.number, group.id), "auto");
     try {
       const response = await api.conversationMessages(token, group.id);
       const nextMessages = uniqueMessages(response.messages);
       writeCachedMessages(me.number, group.id, nextMessages);
-      setMessages(readCachedMessages(me.number, group.id));
+      setPreviewMessage(group.id, latestMessage(nextMessages));
+      replaceMessages(readCachedMessages(me.number, group.id), "auto");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to load group messages");
     }
@@ -425,7 +469,7 @@ export default function App() {
       setMe(response.user);
       localStorage.setItem("feachat.token", response.token);
       localStorage.setItem("feachat.user", JSON.stringify(response.user));
-      await loadContacts(response.token);
+      await loadContacts(response.token, response.user.number);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Authentication failed");
     }
@@ -456,7 +500,7 @@ export default function App() {
     setRequestHistory([]);
     setSelected(null);
     setSelectedGroup(null);
-    setMessages([]);
+    replaceMessages([], "auto");
     setAddFriendOpen(false);
     setAddQuery("");
     setAddSearchResults([]);
@@ -682,7 +726,7 @@ export default function App() {
     await api.deleteFriend(token, friend);
     if (selected?.number === friend) {
       setSelected(null);
-      setMessages([]);
+      replaceMessages([], "auto");
     }
     await loadContacts();
   }
@@ -751,8 +795,10 @@ export default function App() {
     if ((!selected && !selectedGroup) || !me) {
       return;
     }
-    clearCachedMessages(me.number, selectedGroup?.id ?? selected!.number);
-    setMessages([]);
+    const key = selectedGroup?.id ?? selected!.number;
+    clearCachedMessages(me.number, key);
+    setPreviewMessage(key, null);
+    replaceMessages([], "auto");
     setConversationMenuOpen(false);
     setChatSearchQuery("");
     setChatSearchOpen(false);
@@ -773,6 +819,291 @@ export default function App() {
       writeMutedPeers(me.number, next);
       return next;
     });
+  }
+
+  function peerName(number: string) {
+    if (me?.number === number) {
+      return displayName(me);
+    }
+    return displayName(friends.find((friend) => friend.number === number) ?? ({ number, nickname: number } as User));
+  }
+
+  function callPeerUser() {
+    if (callState.status === "idle") {
+      return null;
+    }
+    return friends.find((friend) => friend.number === callState.peerNumber) ?? selected ?? null;
+  }
+
+  function sendCallSignal(receiver: string, signal: CallSignal, conversationId?: string) {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      setStatus("Call signaling is offline");
+      return false;
+    }
+    wsRef.current.send(JSON.stringify({ type: "call_signal", receiver, conversation_id: conversationId, signal }));
+    return true;
+  }
+
+  function callDurationSeconds() {
+    return callStartedAtRef.current ? Math.max(0, Math.round((Date.now() - callStartedAtRef.current) / 1000)) : null;
+  }
+
+  function markCallActive() {
+    callStartedAtRef.current ??= Date.now();
+    setCallState((current) => (current.status === "idle" ? current : { ...current, status: "active" }));
+  }
+
+  async function recordCallMessage(
+    currentCall: Exclude<CallState, { status: "idle" }>,
+    outcome: "ended" | "canceled" | "declined",
+    durationSeconds: number | null = callDurationSeconds()
+  ) {
+    if (!token) {
+      return;
+    }
+    const body = JSON.stringify({
+      mode: currentCall.mode,
+      outcome,
+      duration_seconds: outcome === "ended" ? durationSeconds : null
+    });
+    const conversationId = currentCall.conversationId;
+    const receiver = conversationId ? undefined : currentCall.peerNumber;
+    const key = conversationId ?? receiver;
+    if (!key) {
+      return;
+    }
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "send_message",
+          receiver,
+          conversation_id: conversationId,
+          message_type: "call",
+          body
+        })
+      );
+      return;
+    }
+    const response = conversationId
+      ? await api.sendConversationMessage(token, conversationId, body, "call")
+      : await api.sendMessage(token, receiver!, body, "call");
+    setPreviewMessage(key, response.message);
+    appendMessages((current) => {
+      const nextMessages = uniqueMessages([...current, response.message]);
+      if (me) {
+        writeCachedMessages(me.number, key, nextMessages);
+      }
+      return nextMessages;
+    });
+  }
+
+  function closeCallMedia() {
+    callRingtoneStopRef.current?.();
+    callRingtoneStopRef.current = null;
+    Object.values(peerConnectionsRef.current).forEach((connection) => connection.close());
+    peerConnectionsRef.current = {};
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    setRemoteStreams({});
+    incomingOfferRef.current = null;
+    pendingIceCandidatesRef.current = {};
+    setCallMediaVersion((version) => version + 1);
+  }
+
+  function finishCall(notifyPeer = true) {
+    const currentCall = callStateRef.current;
+    const durationSeconds = callDurationSeconds();
+    if (notifyPeer && currentCall.status !== "idle") {
+      const outcome = currentCall.status === "active" ? "ended" : "canceled";
+      sendCallSignal(currentCall.conversationId ? "" : currentCall.peerNumber, { kind: "end" }, currentCall.conversationId);
+      void recordCallMessage(currentCall, outcome, durationSeconds);
+    }
+    closeCallMedia();
+    callStartedAtRef.current = null;
+    setCallState({ status: "idle" });
+  }
+
+  async function applyPendingIceCandidates(peerNumber: string) {
+    const pc = peerConnectionsRef.current[peerNumber];
+    if (!pc?.remoteDescription) {
+      return;
+    }
+    const candidates = pendingIceCandidatesRef.current[peerNumber] ?? [];
+    pendingIceCandidatesRef.current[peerNumber] = [];
+    for (const candidate of candidates) {
+      await pc.addIceCandidate(candidate).catch(() => undefined);
+    }
+  }
+
+  async function ensureLocalStream(mode: CallMode) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera and microphone are unavailable in this window. Restart FeaChat from the updated Tauri app and allow macOS media permission.");
+    }
+    if (!localStreamRef.current) {
+      localStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: mode === "video" });
+    }
+    return localStreamRef.current;
+  }
+
+  async function createCallConnection(peerNumber: string, mode: CallMode) {
+    const stream = await ensureLocalStream(mode);
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    peerConnectionsRef.current[peerNumber] = pc;
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendCallSignal(peerNumber, { kind: "ice", candidate: event.candidate.toJSON() });
+      }
+    };
+    pc.ontrack = (event) => {
+      remoteStreamRef.current = event.streams[0] ?? remoteStreamRef.current;
+      if (event.streams[0]) {
+        setRemoteStreams((current) => ({ ...current, [peerNumber]: event.streams[0] }));
+      }
+      setCallMediaVersion((version) => version + 1);
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") {
+        markCallActive();
+      }
+      if (["failed", "closed"].includes(pc.connectionState)) {
+        finishCall(false);
+      }
+    };
+    setCallMediaVersion((version) => version + 1);
+    return pc;
+  }
+
+  async function startCall(mode: CallMode) {
+    if (!selected && !selectedGroup) {
+      setStatus("Select a chat before calling");
+      return;
+    }
+    if (callState.status !== "idle") {
+      setStatus("Finish the current call first");
+      return;
+    }
+    setStatus("");
+    setCallMenuOpen(false);
+    const targets = selectedGroup
+      ? selectedGroup.members.filter((member) => member.number !== me?.number).map((member) => member.number)
+      : selected
+        ? [selected.number]
+        : [];
+    if (targets.length === 0) {
+      setStatus("No available call participants");
+      return;
+    }
+    closeCallMedia();
+    callStartedAtRef.current = null;
+    const conversationId = selectedGroup?.id;
+    const title = selectedGroup ? groupTitle(selectedGroup) : displayName(selected!);
+    setCallState({ status: "outgoing", mode, peerNumber: conversationId ?? targets[0], peerName: title, conversationId });
+    try {
+      await ensureLocalStream(mode);
+      for (const target of targets) {
+        const pc = await createCallConnection(target, mode);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendCallSignal(target, { kind: "offer", mode, description: offer }, conversationId);
+      }
+    } catch (error) {
+      finishCall(false);
+      setStatus(error instanceof Error ? error.message : "Could not start call");
+    }
+  }
+
+  async function acceptCall() {
+    if (callState.status !== "incoming" || !incomingOfferRef.current) {
+      return;
+    }
+    callRingtoneStopRef.current?.();
+    callRingtoneStopRef.current = null;
+    setStatus("");
+    const { peerNumber, mode } = callState;
+    const offer = incomingOfferRef.current;
+    const pendingIce = pendingIceCandidatesRef.current[peerNumber] ?? [];
+    setCallState({ ...callState, status: "connecting" });
+    try {
+      closeCallMedia();
+      pendingIceCandidatesRef.current[peerNumber] = pendingIce;
+      const pc = await createCallConnection(peerNumber, mode);
+      await pc.setRemoteDescription(offer);
+      await applyPendingIceCandidates(peerNumber);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendCallSignal(peerNumber, { kind: "answer", description: answer });
+      markCallActive();
+    } catch (error) {
+      sendCallSignal(peerNumber, { kind: "reject" });
+      finishCall(false);
+      setStatus(error instanceof Error ? error.message : "Could not answer call");
+    }
+  }
+
+  function rejectCall() {
+    if (callState.status !== "incoming") {
+      return;
+    }
+    callRingtoneStopRef.current?.();
+    callRingtoneStopRef.current = null;
+    sendCallSignal(callState.peerNumber, { kind: "reject" });
+    finishCall(false);
+  }
+
+  async function handleCallSignal(sender: string, signal: CallSignal, conversationId?: string) {
+    if (signal.kind === "offer") {
+      if (callStateRef.current.status !== "idle") {
+        sendCallSignal(sender, { kind: "reject" });
+        return;
+      }
+      incomingOfferRef.current = signal.description;
+      const incomingGroup = conversationId ? conversations.find((conversation) => conversation.id === conversationId) : null;
+      callStartedAtRef.current = null;
+      callRingtoneStopRef.current?.();
+      callRingtoneStopRef.current = startIncomingCallRingtone();
+      setCallState({
+        status: "incoming",
+        mode: signal.mode,
+        peerNumber: sender,
+        peerName: incomingGroup ? `${groupTitle(incomingGroup)} · ${peerName(sender)}` : peerName(sender),
+        conversationId
+      });
+      return;
+    }
+    if (signal.kind === "answer") {
+      await peerConnectionsRef.current[sender]?.setRemoteDescription(signal.description);
+      await applyPendingIceCandidates(sender);
+      markCallActive();
+      return;
+    }
+    if (signal.kind === "ice") {
+      const pc = peerConnectionsRef.current[sender];
+      if (pc?.remoteDescription) {
+        await pc.addIceCandidate(signal.candidate).catch(() => undefined);
+      } else {
+        pendingIceCandidatesRef.current[sender] = [...(pendingIceCandidatesRef.current[sender] ?? []), signal.candidate];
+      }
+      return;
+    }
+    if (signal.kind === "reject") {
+      callRingtoneStopRef.current?.();
+      callRingtoneStopRef.current = null;
+      const currentCall = callStateRef.current;
+      if (currentCall.status !== "idle") {
+        void recordCallMessage(currentCall, "declined", null);
+      }
+      finishCall(false);
+      setStatus("Call declined");
+      return;
+    }
+    if (signal.kind === "end") {
+      callRingtoneStopRef.current?.();
+      callRingtoneStopRef.current = null;
+      finishCall(false);
+      setStatus("Call ended");
+    }
   }
 
   async function sendMessage(event: FormEvent) {
@@ -800,10 +1131,12 @@ export default function App() {
       const response = selectedGroup
         ? await api.sendConversationMessage(token, selectedGroup.id, text)
         : await api.sendMessage(token, selected!.number, text);
-      setMessages((current) => {
+      const key = selectedGroup?.id ?? selected!.number;
+      setPreviewMessage(key, response.message);
+      appendMessages((current) => {
         const nextMessages = uniqueMessages([...current, response.message]);
         if (me) {
-          writeCachedMessages(me.number, selectedGroup?.id ?? selected!.number, nextMessages);
+          writeCachedMessages(me.number, key, nextMessages);
         }
         return nextMessages;
       });
@@ -839,10 +1172,12 @@ export default function App() {
         const response = selectedGroup
           ? await api.uploadConversationAttachment(token, selectedGroup.id, file)
           : await api.uploadAttachment(token, selected!.number, file);
-        setMessages((current) => {
+        const key = selectedGroup?.id ?? selected!.number;
+        setPreviewMessage(key, response.message);
+        appendMessages((current) => {
           const nextMessages = uniqueMessages([...current, response.message]);
           if (me) {
-            writeCachedMessages(me.number, selectedGroup?.id ?? selected!.number, nextMessages);
+            writeCachedMessages(me.number, key, nextMessages);
           }
           return nextMessages;
         });
@@ -856,36 +1191,70 @@ export default function App() {
     }
   }
 
+  async function downloadAttachment(attachment: NonNullable<Message["attachment"]>) {
+    setUploadError("");
+    try {
+      const response = await fetch(api.fileUrl(attachment.url, true));
+      if (!response.ok) {
+        throw new Error("Download failed");
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = attachment.name || "download";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Download failed");
+    }
+  }
+
   useEffect(() => {
     if (!token) {
       return;
     }
-    loadContacts().catch((error) => {
+    loadContacts(token, me?.number).catch((error) => {
       if (error instanceof Error && error.message === "Not authenticated") {
         logout();
         return;
       }
       setStatus(error instanceof Error ? error.message : "Failed to load contacts");
     });
-  }, [token]);
+  }, [token, me?.number]);
 
   useEffect(() => {
-    if (!token) {
+    if (!token || !me?.number) {
       return;
     }
     const interval = window.setInterval(() => {
-      loadContacts(token).catch(() => undefined);
+      loadContacts(token, me.number).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [token]);
+  }, [token, me?.number]);
 
   useEffect(() => {
     if (!me) {
+      setUnreadCounts({});
+      setDockUnreadBadge(0);
       return;
     }
     setTheme(readTheme(me.number));
     setMutedPeers(readMutedPeers(me.number));
+    setUnreadCounts(readUnreadCounts(me.number));
+    return migrateLegacyLocalCache(() => {
+      setTheme(readTheme(me.number));
+      setMutedPeers(readMutedPeers(me.number));
+      setUnreadCounts(readUnreadCounts(me.number));
+    });
   }, [me?.number]);
+
+  useEffect(() => {
+    const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
+    setDockUnreadBadge(totalUnread);
+  }, [unreadCounts]);
 
   useEffect(() => {
     if (!appMenuOpen) {
@@ -912,6 +1281,34 @@ export default function App() {
     document.addEventListener("pointerdown", closeMenu);
     return () => document.removeEventListener("pointerdown", closeMenu);
   }, [addMenuOpen]);
+
+  useEffect(() => {
+    if (!callMenuOpen) {
+      return;
+    }
+    const closeMenu = (event: PointerEvent) => {
+      if (!callMenuRef.current?.contains(event.target as Node)) {
+        setCallMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeMenu);
+    return () => document.removeEventListener("pointerdown", closeMenu);
+  }, [callMenuOpen]);
+
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
+
+  useEffect(() => {
+    return () => {
+      stopIncomingCallRingtone();
+      setDockUnreadBadge(0);
+    };
+  }, []);
+
+  useEffect(() => {
+    mutedPeersRef.current = mutedPeers;
+  }, [mutedPeers]);
 
   useEffect(() => {
     if (params.get("autoLogin") !== "1") {
@@ -944,16 +1341,28 @@ export default function App() {
         const message = payload.message as Message;
         const groupId = message.conversation_id?.startsWith("grp:") ? message.conversation_id : null;
         const peer = groupId ?? (message.sender === me?.number ? message.receiver : message.sender);
+        const isCurrentConversation = groupId ? groupId === selectedGroupId : peer === selectedNumber;
+        if (message.sender !== me?.number && message.type !== "call" && !mutedPeersRef.current.has(peer)) {
+          playIncomingMessageSound();
+        }
+        if (message.sender !== me?.number && !isCurrentConversation) {
+          incrementUnreadCount(peer);
+        }
         if (me?.number) {
           mergeCachedMessages(me.number, peer, [message]);
+          setPreviewMessage(peer, message);
         }
-        setMessages((current) => {
-          if (groupId ? groupId !== selectedGroupId : peer !== selectedNumber) {
+        appendMessages((current) => {
+          if (!isCurrentConversation) {
             return current;
           }
           return uniqueMessages([...current, message]);
         });
         loadContacts().catch(() => undefined);
+      } else if (payload.type === "call_signal") {
+        handleCallSignal(payload.sender, payload.signal as CallSignal, payload.conversation_id).catch((error) => {
+          setStatus(error instanceof Error ? error.message : "Call signaling failed");
+        });
       }
     };
     return () => {
@@ -962,8 +1371,19 @@ export default function App() {
   }, [token, me?.number, selectedNumber, selectedGroupId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const behavior = scrollBehaviorRef.current;
+    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    scrollBehaviorRef.current = "smooth";
   }, [messages]);
+
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStreamRef.current;
+    }
+  }, [callMediaVersion, callState.status]);
 
   const orderedFriends = useMemo(() => [...friends].sort((a, b) => displayName(a).localeCompare(displayName(b))), [friends]);
   const friendNumbers = useMemo(() => new Set(friends.map((friend) => friend.number)), [friends]);
@@ -984,6 +1404,26 @@ export default function App() {
     }
     return groups.filter((conversation) => groupTitle(conversation).toLowerCase().includes(needle));
   }, [conversations, query]);
+  const chatListItems = useMemo(() => {
+    const items: ChatListItem[] = [
+      ...groupConversations.map((conversation) => ({ kind: "group" as const, conversation })),
+      ...filteredFriends.map((friend) => ({ kind: "direct" as const, friend }))
+    ];
+    return items.sort((a, b) => {
+      const aKey = a.kind === "group" ? a.conversation.id : a.friend.number;
+      const bKey = b.kind === "group" ? b.conversation.id : b.friend.number;
+      const aMessage = previewMessages[aKey];
+      const bMessage = previewMessages[bKey];
+      const aTime = aMessage ? parseMessageTime(aMessage.time).getTime() : 0;
+      const bTime = bMessage ? parseMessageTime(bMessage.time).getTime() : 0;
+      if (aTime !== bTime) {
+        return bTime - aTime;
+      }
+      const aTitle = a.kind === "group" ? conversationTitle(a.conversation) : displayName(a.friend);
+      const bTitle = b.kind === "group" ? conversationTitle(b.conversation) : displayName(b.friend);
+      return aTitle.localeCompare(bTitle);
+    });
+  }, [filteredFriends, groupConversations, previewMessages]);
   const contentTitle = selectedGroup
     ? groupTitle(selectedGroup)
     : selected
@@ -1002,14 +1442,10 @@ export default function App() {
     return orderedMessages.filter((message) => messagePreview(message).toLowerCase().includes(query));
   }, [orderedMessages, chatSearchQuery]);
   const conversationPreviews = useMemo(() => {
-    if (!me) {
-      return {};
-    }
     return Object.fromEntries(
       [
         ...friends.map((friend) => {
-        const source = selected?.number === friend.number ? orderedMessages : sortMessages(readCachedMessages(me.number, friend.number));
-        const last = source.at(-1);
+        const last = previewMessages[friend.number] ?? null;
         return [
           friend.number,
           last
@@ -1021,11 +1457,7 @@ export default function App() {
         ];
         }),
         ...groupConversations.map((conversation) => {
-          const source =
-            selectedGroup?.id === conversation.id
-              ? orderedMessages
-              : sortMessages(readCachedMessages(me.number, conversation.id));
-          const last = source.at(-1) ?? conversation.last_message;
+          const last = previewMessages[conversation.id] ?? null;
           return [
             conversation.id,
             last
@@ -1038,7 +1470,7 @@ export default function App() {
         })
       ]
     );
-  }, [friends, groupConversations, me?.number, orderedMessages, selected?.number, selectedGroup?.id]);
+  }, [friends, groupConversations, previewMessages]);
   const contactGroups = useMemo(() => {
     const groups = new Map<string, User[]>();
     for (const friend of filteredFriends) {
@@ -1103,11 +1535,7 @@ export default function App() {
   if (!token || !me) {
     return (
       <main className="auth-shell">
-        <div className="window-controls" aria-label="Window controls">
-          <button className="window-control close" type="button" aria-label="Close" onClick={closeWindow} />
-          <button className="window-control minimize" type="button" aria-label="Minimize" onClick={minimizeWindow} />
-          <button className="window-control maximize" type="button" aria-label="Maximize" onClick={toggleMaximizeWindow} />
-        </div>
+        <WindowControls />
         <section className="auth-panel">
           <div className="brand-row">
             <div className="brand-mark">F</div>
@@ -1161,12 +1589,8 @@ export default function App() {
 
   return (
     <main className={`app-shell theme-${theme}`}>
-      <div className="window-controls" aria-label="Window controls">
-        <button className="window-control close" type="button" aria-label="Close" onClick={closeWindow} />
-        <button className="window-control minimize" type="button" aria-label="Minimize" onClick={minimizeWindow} />
-        <button className="window-control maximize" type="button" aria-label="Maximize" onClick={toggleMaximizeWindow} />
-      </div>
-      <aside className="rail" onMouseDown={startWindowDrag}>
+      <WindowControls />
+      <aside className="rail" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
         <button className="self-avatar" title="Profile" onClick={(event) => openProfileCard(event, me, false)}>
           <img src={userAvatarSrc(me)} alt="" draggable={false} />
         </button>
@@ -1187,7 +1611,7 @@ export default function App() {
             setActiveSection("contacts");
             setSelected(null);
             setSelectedGroup(null);
-            setMessages([]);
+            replaceMessages([], "auto");
             clearTransientUi();
           }}
         >
@@ -1200,7 +1624,7 @@ export default function App() {
             setActiveSection("moments");
             setSelected(null);
             setSelectedGroup(null);
-            setMessages([]);
+            replaceMessages([], "auto");
             clearTransientUi();
           }}
         >
@@ -1242,7 +1666,7 @@ export default function App() {
       </aside>
 
       <section className="sidebar">
-        <div className="search-row" onMouseDown={startWindowDrag}>
+        <div className="search-row" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
           <div className="search-field">
             <Search size={16} />
             <input
@@ -1422,7 +1846,7 @@ export default function App() {
                         setActiveSection("newFriends");
                         setSelected(null);
                         setSelectedGroup(null);
-                        setMessages([]);
+                        replaceMessages([], "auto");
                         clearTransientUi();
                         loadContacts().catch(() => undefined);
                       }}
@@ -1463,42 +1887,54 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    {groupConversations.map((conversation) => (
-                      <button
-                        key={conversation.id}
-                        className={`person-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
-                        onClick={() => loadGroupMessages(conversation)}
-                      >
-                        <GroupAvatar conversation={conversation} />
-                        <span>
-                          <span className="person-title-row">
-                            <strong>{conversationTitle(conversation)}</strong>
-                            {conversationPreviews[conversation.id]?.time && (
-                              <time className="chat-preview-time">{conversationPreviews[conversation.id].time}</time>
-                            )}
+                    {chatListItems.map((item) => {
+                      if (item.kind === "group") {
+                        const { conversation } = item;
+                        return (
+                          <button
+                            key={conversation.id}
+                            className={`person-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
+                            onClick={() => loadGroupMessages(conversation)}
+                          >
+                            <span className="chat-avatar-wrap">
+                              <GroupAvatar conversation={conversation} />
+                              {unreadCounts[conversation.id] > 0 && <span className="unread-badge">{unreadCounts[conversation.id]}</span>}
+                            </span>
+                            <span>
+                              <span className="person-title-row">
+                                <strong>{conversationTitle(conversation)}</strong>
+                                {conversationPreviews[conversation.id]?.time && (
+                                  <time className="chat-preview-time">{conversationPreviews[conversation.id].time}</time>
+                                )}
+                              </span>
+                              <small>{conversationPreviews[conversation.id]?.text ?? "No messages yet"}</small>
+                            </span>
+                          </button>
+                        );
+                      }
+                      const { friend } = item;
+                      return (
+                        <button
+                          key={friend.number}
+                          className={`person-row ${selected?.number === friend.number ? "selected" : ""}`}
+                          onClick={() => loadMessages(friend)}
+                        >
+                          <span className="chat-avatar-wrap">
+                            <UserAvatar user={friend} />
+                            {unreadCounts[friend.number] > 0 && <span className="unread-badge">{unreadCounts[friend.number]}</span>}
                           </span>
-                          <small>{conversationPreviews[conversation.id]?.text ?? "No messages yet"}</small>
-                        </span>
-                      </button>
-                    ))}
-                    {filteredFriends.map((friend) => (
-                      <button
-                        key={friend.number}
-                        className={`person-row ${selected?.number === friend.number ? "selected" : ""}`}
-                        onClick={() => loadMessages(friend)}
-                      >
-                        <UserAvatar user={friend} />
-                        <span>
-                          <span className="person-title-row">
-                            <strong>{displayName(friend)}</strong>
-                            {conversationPreviews[friend.number]?.time && (
-                              <time className="chat-preview-time">{conversationPreviews[friend.number].time}</time>
-                            )}
+                          <span>
+                            <span className="person-title-row">
+                              <strong>{displayName(friend)}</strong>
+                              {conversationPreviews[friend.number]?.time && (
+                                <time className="chat-preview-time">{conversationPreviews[friend.number].time}</time>
+                              )}
+                            </span>
+                            <small>{conversationPreviews[friend.number]?.text ?? "No messages yet"}</small>
                           </span>
-                          <small>{conversationPreviews[friend.number]?.text ?? "No messages yet"}</small>
-                        </span>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </>
                 )}
               </div>
@@ -1508,11 +1944,39 @@ export default function App() {
       </section>
 
       <section className="conversation">
-        <header className="conversation-header" onMouseDown={startWindowDrag}>
+        <header className="conversation-header" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
           {selected || selectedGroup ? (
             <>
               <h2>{selectedGroup ? groupTitle(selectedGroup) : displayName(selected!)}</h2>
               <div className="conversation-tools">
+                {(selected || selectedGroup) && (
+                  <div className="call-menu-anchor" ref={callMenuRef}>
+                    <button
+                      className={`conversation-more call-button ${callMenuOpen ? "active" : ""}`}
+                      type="button"
+                      title="Call"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setCallMenuOpen((open) => !open);
+                        setConversationMenuOpen(false);
+                      }}
+                    >
+                      <Phone size={19} />
+                    </button>
+                    {callMenuOpen && (
+                      <div className="call-popover">
+                        <button type="button" onClick={() => startCall("voice")}>
+                          <Phone size={17} />
+                          Voice Call
+                        </button>
+                        <button type="button" onClick={() => startCall("video")}>
+                          <Video size={17} />
+                          Video Call
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   className="conversation-more"
                   type="button"
@@ -1559,6 +2023,7 @@ export default function App() {
                     ? me
                     : selectedGroup?.members.find((member) => member.number === message.sender) ?? selected ?? me;
                 const inviteCard = parseGroupInviteMessage(message);
+                const callMessage = parseCallMessage(message);
                 const invitePending = inviteCard ? pendingGroupInviteIds.has(inviteCard.invite_id) : false;
                 const inviteJoined = inviteCard ? joinedGroupIds.has(inviteCard.conversation_id) : false;
                 return (
@@ -1572,7 +2037,7 @@ export default function App() {
                           <UserAvatar user={user} className="avatar message-avatar-image" />
                         </button>
                       )}
-                      <div className={`bubble ${message.attachment ? "with-attachment" : ""} ${inviteCard ? "invite-bubble" : ""}`}>
+                      <div className={`bubble ${message.attachment ? "with-attachment" : ""} ${inviteCard ? "invite-bubble" : ""} ${callMessage ? "call-bubble" : ""}`}>
                         {inviteCard ? (
                           <div className="group-invite-card">
                             <strong>{inviteCard.title}</strong>
@@ -1585,20 +2050,45 @@ export default function App() {
                               <span className="invite-state">{inviteJoined ? "Joined" : "Invite Used"}</span>
                             )}
                           </div>
+                        ) : callMessage ? (
+                          <div className="call-message-card">
+                            {callMessage.mode === "video" ? <Video size={15} /> : <Phone size={15} />}
+                            <span>{formatCallMessage(message)}</span>
+                          </div>
                         ) : message.attachment ? (
                           isImageMessage(message) ? (
-                            <a className="image-message" href={api.fileUrl(message.attachment.url)} target="_blank">
-                              <img src={api.fileUrl(message.attachment.url)} alt={message.attachment.name} />
-                              <span>{message.attachment.name}</span>
-                            </a>
+                            <div className="image-message-card">
+                              <a className="image-message" href={api.fileUrl(message.attachment.url)} target="_blank">
+                                <img src={api.fileUrl(message.attachment.url)} alt={message.attachment.name} />
+                              </a>
+                              <div className="attachment-footer">
+                                <span>{message.attachment.name}</span>
+                                <button
+                                  className="file-download"
+                                  type="button"
+                                  onClick={() => downloadAttachment(message.attachment!)}
+                                >
+                                  <Download size={15} />
+                                  Download
+                                </button>
+                              </div>
+                            </div>
                           ) : (
-                            <a className="file-message" href={api.fileUrl(message.attachment.url, true)} target="_blank">
+                            <div className="file-message">
                               <FileText size={22} />
                               <span>
                                 <strong>{message.attachment.name}</strong>
                                 <small>{formatBytes(message.attachment.size)}</small>
                               </span>
-                            </a>
+                              <button
+                                className="file-download"
+                                type="button"
+                                onClick={() => downloadAttachment(message.attachment!)}
+                              >
+                                <Download size={15} />
+                                Download
+                              </button>
+                            </div>
                           )
                         ) : (
                           <p>{message.message}</p>
@@ -1798,6 +2288,99 @@ export default function App() {
           </div>
         )}
       </section>
+
+      {callState.status !== "idle" && (
+        <div className="call-overlay">
+          {(() => {
+            const peer = callPeerUser();
+            const remoteEntries = Object.entries(remoteStreams);
+            const statusLabel =
+              callState.status === "incoming"
+                ? `Incoming ${callState.mode === "video" ? "video" : "voice"} call`
+                : callState.status === "outgoing"
+                  ? "Calling..."
+                  : callState.status === "connecting"
+                    ? "Connecting..."
+                    : callState.mode === "video"
+                      ? "Video call"
+                      : "Voice call";
+            return (
+              <section className={`call-card call-${callState.mode}`}>
+                <div className="call-header">
+                  {peer ? <UserAvatar user={peer} className="avatar call-avatar" /> : <span className="avatar call-avatar">{callState.peerName.charAt(0)}</span>}
+                  <span>
+                    <strong>{callState.peerName}</strong>
+                    <small>{statusLabel}</small>
+                  </span>
+                </div>
+                <div className="call-media">
+                  {callState.mode === "video" ? (
+                    <>
+                      <div className="remote-video-grid">
+                        {remoteEntries.length > 0 ? (
+                          remoteEntries.map(([number, stream]) => (
+                            <video
+                              key={number}
+                              ref={(node) => {
+                                if (node) {
+                                  node.srcObject = stream;
+                                }
+                              }}
+                              className="remote-video"
+                              autoPlay
+                              playsInline
+                            />
+                          ))
+                        ) : (
+                          <div className="remote-video-placeholder">Waiting for video...</div>
+                        )}
+                      </div>
+                      <video ref={localVideoRef} className="local-video" autoPlay muted playsInline />
+                    </>
+                  ) : (
+                    <>
+                      {remoteEntries.map(([number, stream]) => (
+                        <audio
+                          key={number}
+                          ref={(node) => {
+                            if (node) {
+                              node.srcObject = stream;
+                            }
+                          }}
+                          className="call-hidden-media"
+                          autoPlay
+                        />
+                      ))}
+                      <div className="voice-call-mark">
+                        <Phone size={28} />
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="call-actions">
+                  {callState.status === "incoming" ? (
+                    <>
+                      <button className="call-action accept" type="button" onClick={acceptCall}>
+                        <Phone size={17} />
+                        Accept
+                      </button>
+                      <button className="call-action decline" type="button" onClick={rejectCall}>
+                        <PhoneOff size={17} />
+                        Decline
+                      </button>
+                    </>
+                  ) : (
+                    <button className="call-action decline" type="button" onClick={() => finishCall(true)}>
+                      <PhoneOff size={17} />
+                      Hang Up
+                    </button>
+                  )}
+                </div>
+              </section>
+            );
+          })()}
+        </div>
+      )}
 
       {profileCard && (
         <div className="profile-backdrop" onClick={() => setProfileCard(null)}>

@@ -12,6 +12,7 @@ type UserCache = {
   version: 1;
   theme: Theme;
   conversations: Record<string, CachedConversation>;
+  unreadCounts: Record<string, number>;
 };
 
 const MAX_CACHED_MESSAGES = 200;
@@ -24,7 +25,8 @@ function emptyCache(): UserCache {
   return {
     version: 1,
     theme: "classic",
-    conversations: {}
+    conversations: {},
+    unreadCounts: {}
   };
 }
 
@@ -36,7 +38,8 @@ function normalizeCache(value: unknown): UserCache {
   return {
     version: 1,
     theme: candidate.theme === "dark" ? "dark" : "classic",
-    conversations: candidate.conversations && typeof candidate.conversations === "object" ? candidate.conversations : {}
+    conversations: candidate.conversations && typeof candidate.conversations === "object" ? candidate.conversations : {},
+    unreadCounts: candidate.unreadCounts && typeof candidate.unreadCounts === "object" ? candidate.unreadCounts : {}
   };
 }
 
@@ -68,6 +71,30 @@ export function readTheme(number: string): Theme {
 export function writeTheme(number: string, theme: Theme) {
   updateUserCache(number, (cache) => ({ ...cache, theme }));
   localStorage.removeItem(`feachat.theme.${number}`);
+}
+
+export function readUnreadCounts(number: string) {
+  return readUserCache(number).unreadCounts;
+}
+
+export function writeUnreadCounts(number: string, unreadCounts: Record<string, number>) {
+  updateUserCache(number, (cache) => ({ ...cache, unreadCounts }));
+}
+
+export function readMutedPeers(number: string) {
+  const raw = localStorage.getItem(`feachat.muted.${number}`);
+  if (!raw) {
+    return new Set<string>();
+  }
+  try {
+    return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+export function writeMutedPeers(number: string, muted: Set<string>) {
+  localStorage.setItem(`feachat.muted.${number}`, JSON.stringify([...muted]));
 }
 
 export function readCachedMessages(number: string, peer: string) {

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>FeaChat Legacy Cache Bridge</title>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const values = {};
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          if (key && key.startsWith("feachat.")) {
+            values[key] = localStorage.getItem(key);
+          }
+        }
+        window.parent.postMessage({ source: "feachat-legacy-cache", values }, "http://localhost:1420");
+      })();
+    </script>
+  </body>
+</html>

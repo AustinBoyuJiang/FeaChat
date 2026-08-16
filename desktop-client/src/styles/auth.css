@@ -1,0 +1,131 @@
+.auth-shell {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  min-height: 560px;
+  place-items: center;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(0, 118, 246, 0.14), transparent 28%),
+    linear-gradient(135deg, #eef1f4 0%, #f8fafc 50%, #edf7f1 100%);
+}
+
+.auth-panel {
+  width: min(420px, calc(100vw - 40px));
+  padding: 28px;
+  border: 1px solid #dfe4ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 22px 70px rgba(33, 37, 41, 0.14);
+}
+
+.brand-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.brand-mark,
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #0076f6;
+  font-weight: 800;
+}
+
+.brand-row h1,
+.sidebar h2,
+.conversation h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.brand-row p,
+.empty-state p {
+  margin: 4px 0 0;
+  color: #6b7280;
+}
+
+.auth-form,
+.stack-block,
+.friend-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-form {
+  gap: 14px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #111827;
+  background: #ffffff;
+  outline: none;
+}
+
+input:focus {
+  border-color: #0076f6;
+  box-shadow: 0 0 0 3px rgba(0, 118, 246, 0.14);
+}
+
+.mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border-radius: 7px;
+  background: #edf1f5;
+}
+
+.mode-tabs button,
+.icon-button,
+.rail-button,
+.request-row button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.mode-tabs button {
+  height: 34px;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.mode-tabs .active {
+  color: #0f172a;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.primary-action {
+  height: 42px;
+  border: 0;
+  border-radius: 6px;
+  color: #ffffff;
+  background: #0076f6;
+  font-weight: 800;
+}
+
+.status-text {
+  margin: 0;
+  color: #b45309;
+  font-size: 13px;
+}

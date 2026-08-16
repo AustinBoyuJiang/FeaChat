@@ -38,6 +38,7 @@ from .services import (
     login_user,
     register_user,
     reject_friend_request,
+    require_conversation_member,
     require_user,
     save_attachment_message,
     save_conversation_attachment_message,
@@ -350,6 +351,35 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
                 else:
                     message = save_message(db, number, receiver, payload.get("message_type", "text"), body)
                     await manager.broadcast_message(message)
+            elif payload.get("type") == "call_signal":
+                receiver = str(payload.get("receiver", "")).strip()
+                conversation_id = str(payload.get("conversation_id", "")).strip()
+                signal = payload.get("signal")
+                if not (receiver or conversation_id) or not isinstance(signal, dict):
+                    await websocket.send_json({"type": "error", "message": "Missing call receiver or signal"})
+                    continue
+                if conversation_id:
+                    require_conversation_member(db, conversation_id, number)
+                    recipients = [member["number"] for member in conversation_members(db, conversation_id) if member["number"] != number]
+                    for recipient in recipients:
+                        await manager.send_to_user(
+                            recipient,
+                            {
+                                "type": "call_signal",
+                                "sender": number,
+                                "conversation_id": conversation_id,
+                                "signal": signal,
+                            },
+                        )
+                    continue
+                await manager.send_to_user(
+                    receiver,
+                    {
+                        "type": "call_signal",
+                        "sender": number,
+                        "signal": signal,
+                    },
+                )
             elif payload.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             else:
