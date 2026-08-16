@@ -58,9 +58,11 @@ class Database:
                     type TEXT NOT NULL,
                     title TEXT NOT NULL DEFAULT '',
                     owner TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     CHECK(type IN ('direct', 'group')),
+                    CHECK(status IN ('active', 'dissolved')),
                     FOREIGN KEY(owner) REFERENCES users(number)
                 );
 
@@ -71,6 +73,8 @@ class Database:
                     alias TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'active',
                     joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    left_at TEXT,
+                    left_message_id INTEGER,
                     PRIMARY KEY(conversation_id, user_number),
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                     FOREIGN KEY(user_number) REFERENCES users(number),
@@ -144,6 +148,74 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_friend_requests_receiver_status
                     ON friend_requests(receiver, status);
+
+                CREATE TABLE IF NOT EXISTS moment_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author TEXT NOT NULL,
+                    body TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(author) REFERENCES users(number)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_moment_posts_author_time
+                    ON moment_posts(author, created_at);
+
+                CREATE TABLE IF NOT EXISTS moment_images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    original_name TEXT NOT NULL,
+                    stored_name TEXT NOT NULL UNIQUE,
+                    mime_type TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(post_id) REFERENCES moment_posts(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_moment_images_post
+                    ON moment_images(post_id, position);
+
+                CREATE TABLE IF NOT EXISTS moment_likes (
+                    post_id INTEGER NOT NULL,
+                    user_number TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(post_id, user_number),
+                    FOREIGN KEY(post_id) REFERENCES moment_posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(user_number) REFERENCES users(number)
+                );
+
+                CREATE TABLE IF NOT EXISTS moment_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    author TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(post_id) REFERENCES moment_posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(author) REFERENCES users(number)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_moment_comments_post
+                    ON moment_comments(post_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS moment_notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    post_id INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    comment_id INTEGER,
+                    is_read INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(owner) REFERENCES users(number),
+                    FOREIGN KEY(actor) REFERENCES users(number),
+                    FOREIGN KEY(post_id) REFERENCES moment_posts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(comment_id) REFERENCES moment_comments(id) ON DELETE CASCADE,
+                    CHECK(type IN ('like', 'comment'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_moment_notifications_owner_read
+                    ON moment_notifications(owner, is_read, created_at);
                 """
             )
             self._ensure_column("users", "gender", "TEXT NOT NULL DEFAULT 'unknown'")
@@ -153,6 +225,9 @@ class Database:
             self._backfill_avatar_colors()
             self._remove_group_invites_unique_constraint()
             self._ensure_column("messages", "conversation_id", "TEXT")
+            self._ensure_column("conversations", "status", "TEXT NOT NULL DEFAULT 'active'")
+            self._ensure_column("conversation_members", "left_at", "TEXT")
+            self._ensure_column("conversation_members", "left_message_id", "INTEGER")
             self._ensure_column("friendships", "alias", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("friendships", "tags", "TEXT NOT NULL DEFAULT '[]'")
             self.conn.execute(

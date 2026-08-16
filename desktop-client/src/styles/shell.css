@@ -55,7 +55,7 @@
   position: fixed;
   top: 18px;
   left: 9px;
-  z-index: 80;
+  z-index: 45;
   display: flex;
   gap: 7px;
   align-items: center;
@@ -80,6 +80,11 @@
 
 .window-control.maximize {
   background: #28c840;
+}
+
+.window-controls.inactive .window-control {
+  background: #5f5f5f;
+  box-shadow: none;
 }
 
 .app-shell.theme-classic {

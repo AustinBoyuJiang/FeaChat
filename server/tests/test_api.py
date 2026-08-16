@@ -111,6 +111,26 @@ class ApiFlowTest(unittest.TestCase):
         response = self.client.get("/api/conversations/bob001/messages", headers=self.auth(alice))
         self.assertEqual(response.json()["messages"][0]["message"], "Hello Bob")
 
+        response = self.client.delete("/api/friends/bob001", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+
+        response = self.client.get("/api/conversations", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+        direct = next(item for item in response.json()["conversations"] if item["peer"]["number"] == "bob001")
+        self.assertEqual(direct["status"], "inactive")
+        self.assertEqual(direct["last_message"]["message"], "Hello Bob")
+
+        response = self.client.get("/api/conversations/bob001/messages", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["messages"][0]["message"], "Hello Bob")
+
+        response = self.client.post(
+            "/api/conversations/bob001/messages",
+            headers=self.auth(alice),
+            json={"message_type": "text", "body": "Should not send"},
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
     def test_reciprocal_friend_request_accepts_existing_request(self):
         self.register("alice1", "Alice")
         self.register("bob001", "Bob")
@@ -174,6 +194,76 @@ class ApiFlowTest(unittest.TestCase):
         response = self.client.get(f'{message["attachment"]["url"]}?download=1')
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn("note.txt", response.headers["content-disposition"])
+
+    def test_moments_feed_likes_and_comments(self):
+        self.register("alice1", "Alice")
+        self.register("bob001", "Bob")
+        self.register("carol1", "Carol")
+        alice = self.login("alice1")
+        bob = self.login("bob001")
+        carol = self.login("carol1")
+
+        response = self.client.post(
+            "/api/friends/requests",
+            headers=self.auth(alice),
+            json={"receiver": "bob001"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        response = self.client.post("/api/friends/requests/alice1/accept", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+
+        response = self.client.post(
+            "/api/moments",
+            headers=self.auth(alice),
+            data={"body": "first moment"},
+            files=[("files", ("photo.png", b"fake image", "image/png"))],
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        moment = response.json()["moment"]
+        self.assertEqual(moment["body"], "first moment")
+        self.assertEqual(moment["images"][0]["name"], "photo.png")
+
+        response = self.client.get("/api/moments", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["moments"][0]["id"], moment["id"])
+
+        response = self.client.get("/api/moments", headers=self.auth(carol))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["moments"], [])
+
+        response = self.client.post(f"/api/moments/{moment['id']}/like", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["moment"]["liked_by_me"])
+        self.assertEqual(response.json()["moment"]["likes"][0]["number"], "bob001")
+
+        response = self.client.post(
+            f"/api/moments/{moment['id']}/comments",
+            headers=self.auth(bob),
+            json={"body": "nice"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["moment"]["comments"][0]["body"], "nice")
+
+        response = self.client.post(f"/api/moments/{moment['id']}/like", headers=self.auth(carol))
+        self.assertEqual(response.status_code, 403, response.text)
+
+        response = self.client.get(moment["images"][0]["url"])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.content, b"fake image")
+
+        response = self.client.delete(f"/api/moments/{moment['id']}", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 403, response.text)
+
+        response = self.client.delete(f"/api/moments/{moment['id']}", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "deleted")
+
+        response = self.client.get("/api/moments", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["moments"], [])
+
+        response = self.client.get(moment["images"][0]["url"])
+        self.assertEqual(response.status_code, 404, response.text)
 
     def test_account_settings_flow(self):
         self.register("alice1", "Alice")
@@ -302,7 +392,10 @@ class ApiFlowTest(unittest.TestCase):
 
         response = self.client.get(f"/api/conversations/by-id/{group['id']}/messages", headers=self.auth(alice))
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([message["message"] for message in response.json()["messages"]], ["Hello group", "plan.txt"])
+        self.assertEqual(
+            [message["message"] for message in response.json()["messages"]],
+            ["Bob joined the group", "Hello group", "plan.txt"],
+        )
 
         response = self.client.post(
             f"/api/conversations/{group['id']}/invites",
@@ -321,6 +414,7 @@ class ApiFlowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["conversation"]["title"], "Renamed Room")
+        self.assertEqual(response.json()["message"]["type"], "system")
 
         response = self.client.patch(
             f"/api/conversations/{group['id']}/me",
@@ -330,9 +424,94 @@ class ApiFlowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["conversation"]["my_alias"], "B in Room")
 
+        response = self.client.patch(
+            f"/api/conversations/{group['id']}/owner",
+            headers=self.auth(alice),
+            json={"owner": "bob001"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["conversation"]["owner"], "bob001")
+        self.assertEqual(response.json()["conversation"]["members"][0]["number"], "bob001")
+        self.assertEqual(response.json()["message"]["type"], "system")
+
+        response = self.client.patch(
+            f"/api/conversations/{group['id']}/owner",
+            headers=self.auth(bob),
+            json={"owner": "alice1"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["conversation"]["owner"], "alice1")
+
         response = self.client.delete(f"/api/conversations/{group['id']}/members/carol1", headers=self.auth(alice))
         self.assertEqual(response.status_code, 200, response.text)
         self.assertNotIn("carol1", {member["number"] for member in response.json()["conversation"]["members"]})
+        self.assertEqual(response.json()["message"]["type"], "system")
+
+        response = self.client.delete(f"/api/conversations/{group['id']}/me", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 400, response.text)
+
+        response = self.client.delete(f"/api/conversations/{group['id']}/me", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "left")
+
+        response = self.client.get("/api/conversations", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        bob_group = next(item for item in response.json()["conversations"] if item["id"] == group["id"])
+        self.assertEqual(bob_group["my_status"], "left")
+
+        response = self.client.get(f"/api/conversations/by-id/{group['id']}/messages", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+
+        response = self.client.post(
+            f"/api/conversations/by-id/{group['id']}/messages",
+            headers=self.auth(bob),
+            json={"message_type": "text", "body": "Should not send"},
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+
+        with self.client.websocket_connect(f"/ws?token={bob}") as bob_ws:
+            bob_ws.send_json(
+                {
+                    "type": "send_message",
+                    "conversation_id": group["id"],
+                    "message_type": "text",
+                    "body": "Dropped group message",
+                }
+            )
+            self.assertEqual(bob_ws.receive_json()["type"], "error")
+            bob_ws.send_json(
+                {
+                    "type": "send_message",
+                    "receiver": "alice1",
+                    "message_type": "text",
+                    "body": "Socket still works",
+                }
+            )
+            self.assertEqual(bob_ws.receive_json()["message"]["message"], "Socket still works")
+
+        response = self.client.delete(f"/api/conversations/{group['id']}", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "dissolved")
+        self.assertEqual(response.json()["message"]["type"], "system")
+
+        response = self.client.get(f"/api/conversations/by-id/{group['id']}/messages", headers=self.auth(bob))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("Group chat was disbanded", [message["message"] for message in response.json()["messages"]])
+
+        response = self.client.get("/api/conversations", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+        alice_group = next(item for item in response.json()["conversations"] if item["id"] == group["id"])
+        self.assertEqual(alice_group["status"], "dissolved")
+
+        response = self.client.get(f"/api/conversations/by-id/{group['id']}/messages", headers=self.auth(alice))
+        self.assertEqual(response.status_code, 200, response.text)
+
+        response = self.client.post(
+            f"/api/conversations/by-id/{group['id']}/messages",
+            headers=self.auth(alice),
+            json={"message_type": "text", "body": "Should not send"},
+        )
+        self.assertEqual(response.status_code, 403, response.text)
 
 
 if __name__ == "__main__":

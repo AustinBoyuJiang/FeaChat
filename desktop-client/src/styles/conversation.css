@@ -60,31 +60,37 @@
 
 .call-popover {
   position: absolute;
-  top: 40px;
+  top: 38px;
   right: 0;
   z-index: 35;
-  width: 190px;
+  width: 168px;
   border: 1px solid var(--menu-border);
   border-radius: 6px;
-  padding: 8px 0;
+  padding: 6px 0;
   color: var(--menu-fg);
   background: var(--menu-bg);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
 }
 
 .call-popover button {
   display: flex;
   width: 100%;
-  height: 38px;
+  height: 34px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   border: 0;
-  padding: 0 16px;
+  padding: 0 14px;
   color: inherit;
   background: transparent;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
   text-align: left;
+}
+
+.call-popover button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
 }
 
 .call-popover button:hover {
@@ -109,7 +115,7 @@
   flex-direction: column;
   border-left: 1px solid var(--modal-line);
   overflow-y: auto;
-  padding: 24px 28px;
+  padding: 18px 24px;
   color: var(--modal-fg);
   background: var(--modal-bg);
   box-shadow: -18px 0 34px rgba(0, 0, 0, 0.08);
@@ -117,7 +123,7 @@
 
 .conversation-members {
   display: flex;
-  min-height: 106px;
+  min-height: 92px;
   align-items: flex-start;
   border-bottom: 1px solid var(--modal-line);
   padding-bottom: 18px;
@@ -162,39 +168,43 @@
 }
 
 .member-action:hover .member-action-box {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--modal-fg);
+  border-color: var(--modal-fg);
 }
 
 .group-details {
   display: grid;
-  gap: 2px;
+  gap: 0;
   border-bottom: 1px solid var(--modal-line);
-  padding: 18px 0;
+  padding: 14px 0 0;
 }
 
 .editable-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  row-gap: 5px;
+  column-gap: 6px;
   align-items: center;
-  min-height: 62px;
+  min-height: 0;
+  padding: 6px 0 9px;
 }
 
 .editable-row > span {
   grid-column: 1 / -1;
   color: var(--modal-fg);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
 }
 
 .editable-row strong {
   min-width: 0;
   overflow: hidden;
   color: var(--modal-muted);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -233,8 +243,8 @@
 
 .settings-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  min-height: 46px;
   align-items: center;
   border: 0;
   border-bottom: 1px solid var(--modal-line);
@@ -242,7 +252,9 @@
   color: var(--modal-fg);
   background: transparent;
   text-align: left;
-  font-size: 16px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.2;
 }
 
 .settings-row:hover {
@@ -250,12 +262,19 @@
 }
 
 .row-chevron {
+  display: grid;
+  width: 16px;
+  height: 100%;
+  place-items: center;
   color: var(--modal-muted);
-  font-size: 28px;
+  font-size: 20px;
+  font-weight: 400;
   line-height: 1;
+  transform: translateY(-1px);
 }
 
 .switch-row {
+  grid-template-columns: minmax(0, 1fr) auto;
   cursor: pointer;
 }
 
@@ -296,10 +315,65 @@
 
 .clear-row {
   display: grid;
-  min-height: 64px;
+  min-height: 34px;
   place-items: center;
   border-bottom: 0;
   color: #ff4d4f;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.clear-row:hover,
+.danger-actions .settings-row:hover {
+  color: #c92f32;
+  background: transparent;
+}
+
+.compact-settings-row {
+  border-top: 1px solid var(--modal-line);
+  border-bottom: 0;
+}
+
+.danger-actions {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--modal-line);
+  padding: 6px 0 0;
+}
+
+.danger-actions .settings-row {
+  min-height: 34px;
+  border-bottom: 0;
+}
+
+.group-state-note,
+.conversation-closed-note {
+  margin: 0;
+  color: var(--modal-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.group-state-note {
+  border-bottom: 1px solid var(--modal-line);
+  padding: 0 0 12px;
+}
+
+.conversation-closed-note {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--sidebar-border);
+  padding: 14px 20px;
+  text-align: center;
+  background: var(--composer-bg);
+}
+
+.system-message {
+  max-width: 78%;
+  margin: 8px auto 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
   text-align: center;
 }
 
@@ -441,15 +515,21 @@
 
 .call-action {
   display: inline-flex;
-  height: 32px;
+  height: 30px;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 0;
   border-radius: 5px;
-  padding: 0 13px;
+  padding: 0 12px;
   color: #ffffff;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.call-action svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.9;
 }
 
 .call-action.accept {
@@ -600,15 +680,39 @@
   padding: 12px;
 }
 
+.group-invite-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.group-invite-card-main span {
+  min-width: 0;
+}
+
 .group-invite-card strong {
+  display: block;
+  overflow: hidden;
   color: #1f2937;
   font-size: 15px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .group-invite-card small {
+  display: block;
+  margin-top: 3px;
   color: #6b7280;
   font-size: 12px;
+}
+
+.group-invite-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  font-size: 14px;
 }
 
 .group-invite-card button {
@@ -618,7 +722,7 @@
   color: #ffffff;
   background: var(--accent);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .invite-state {
@@ -629,7 +733,7 @@
   color: #8a8a8a;
   background: #f1f1f1;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .call-message-card {

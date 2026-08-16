@@ -1,11 +1,13 @@
 import { ChangeEvent, FormEvent, Fragment, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Aperture,
+  Camera,
   Check,
   CircleUserRound,
   Copy,
   Download,
   FileText,
+  Heart,
   Image as ImageIcon,
   Menu,
   LogOut,
@@ -63,7 +65,9 @@ import {
   sortMessages,
   shouldShowTimestamp,
   uniqueMessages,
-  voiceDurationLabel
+  voiceDurationLabel,
+  type GroupInviteAvatarMember,
+  type GroupInvitePayload
 } from "./lib/messages";
 import { setDockUnreadBadge } from "./lib/dockBadge";
 import { playIncomingMessageSound, startIncomingCallRingtone, stopIncomingCallRingtone } from "./lib/sounds";
@@ -74,16 +78,27 @@ import {
   displayName,
   genderMarker,
   GroupAvatar,
+  GroupInviteAvatar,
   groupTitle,
   UserAvatar,
   userAvatarSrc
 } from "./lib/user";
-import type { Conversation, FriendRequest, FriendRequestRecord, GroupInvite, Message, User } from "./types";
+import type {
+  Conversation,
+  FriendRequest,
+  FriendRequestRecord,
+  GroupInvite,
+  Message,
+  MomentImage,
+  MomentNotification,
+  MomentPost,
+  User
+} from "./types";
 
 type AuthMode = "login" | "register";
 type Section = "chats" | "contacts" | "newFriends" | "moments";
 type ProfileRelation = "self" | "friend" | "stranger";
-type ContactPickerMode = "createGroup" | "inviteGroup" | "kickGroup";
+type ContactPickerMode = "createGroup" | "inviteGroup" | "kickGroup" | "transferOwner";
 type InlineEditTarget = "profileAlias" | "profileTags" | "groupAlias" | "groupName";
 type SettingsSection = "account" | "appearance";
 type ChatListItem = { kind: "group"; conversation: Conversation } | { kind: "direct"; friend: User };
@@ -254,6 +269,7 @@ export default function App() {
   const [addFriendOpen, setAddFriendOpen] = useState(false);
   const [addQuery, setAddQuery] = useState("");
   const [addSearchResults, setAddSearchResults] = useState<User[]>([]);
+  const [addFriendStatus, setAddFriendStatus] = useState("");
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [contactPickerMode, setContactPickerMode] = useState<ContactPickerMode | null>(null);
   const [contactPickerSearch, setContactPickerSearch] = useState("");
@@ -304,6 +320,22 @@ export default function App() {
   const [transcriptions, setTranscriptions] = useState<Record<number, string>>({});
   const [transcriptionErrors, setTranscriptionErrors] = useState<Record<number, string>>({});
   const [previewMessages, setPreviewMessages] = useState<Record<string, Message>>({});
+  const [moments, setMoments] = useState<MomentPost[]>([]);
+  const [momentProfileUser, setMomentProfileUser] = useState<User | null>(null);
+  const [momentsLoading, setMomentsLoading] = useState(false);
+  const [momentsComposerOpen, setMomentsComposerOpen] = useState(false);
+  const [momentNotificationsOpen, setMomentNotificationsOpen] = useState(false);
+  const [momentNotifications, setMomentNotifications] = useState<MomentNotification[]>([]);
+  const [momentUnreadCount, setMomentUnreadCount] = useState(0);
+  const [momentDraft, setMomentDraft] = useState("");
+  const [momentFiles, setMomentFiles] = useState<File[]>([]);
+  const [momentCommentDrafts, setMomentCommentDrafts] = useState<Record<number, string>>({});
+  const [activeMomentCommentId, setActiveMomentCommentId] = useState<number | null>(null);
+  const [activeMomentMenuId, setActiveMomentMenuId] = useState<number | null>(null);
+  const [momentMottoEditing, setMomentMottoEditing] = useState(false);
+  const [momentMottoDraft, setMomentMottoDraft] = useState("");
+  const [profileMomentImages, setProfileMomentImages] = useState<Record<string, MomentImage[]>>({});
+  const [momentStatus, setMomentStatus] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollBehaviorRef = useRef<ScrollBehavior>("auto");
@@ -320,6 +352,7 @@ export default function App() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const momentFileInputRef = useRef<HTMLInputElement | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const appMenuRef = useRef<HTMLDivElement | null>(null);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
@@ -389,6 +422,34 @@ export default function App() {
   function persistPinnedChatKeys(nextKeys: string[]) {
     if (me?.number) {
       writePinnedChatKeys(me.number, nextKeys);
+    }
+  }
+
+  function groupAvatarSnapshot(conversation: Conversation): GroupInviteAvatarMember[] {
+    return conversation.members.slice(0, 9).map((member) => ({
+      number: member.number,
+      nickname: member.nickname,
+      display_name: member.group_alias || displayName(member),
+      avatar_url: member.avatar_url,
+      avatar_color: member.avatar_color
+    }));
+  }
+
+  function withGroupInviteSnapshot(message: Message, conversation: Conversation) {
+    if (message.type !== "group_invite") {
+      return message;
+    }
+    try {
+      const payload = JSON.parse(message.message) as GroupInvitePayload;
+      if (payload.avatar_members?.length) {
+        return message;
+      }
+      return {
+        ...message,
+        message: JSON.stringify({ ...payload, avatar_members: groupAvatarSnapshot(conversation) })
+      };
+    } catch {
+      return message;
     }
   }
 
@@ -524,6 +585,111 @@ export default function App() {
     });
   }
 
+  function cacheConversationMessage(key: string, message?: Message) {
+    if (!me || !message) {
+      return;
+    }
+    const cached = uniqueMessages([...readCachedMessages(me.number, key), message]);
+    writeCachedMessages(me.number, key, cached);
+    setPreviewMessage(key, latestMessage(cached));
+    if (selectedGroup?.id === key || selected?.number === key) {
+      appendMessages((current) => uniqueMessages([...current, message]));
+    }
+  }
+
+  async function leaveGroupById(groupId: string) {
+    if (!token || !me) {
+      return;
+    }
+    try {
+      const response = await api.leaveGroup(token, groupId);
+      cacheConversationMessage(groupId, response.message);
+      setSelectedGroup((current) =>
+        current?.id === groupId
+          ? {
+              ...current,
+              my_status: "left",
+              members: current.members.filter((member) => member.number !== me.number)
+            }
+          : current
+      );
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === groupId
+            ? {
+                ...conversation,
+                my_status: "left" as const,
+                members: conversation.members.filter((member) => member.number !== me.number),
+                last_message: response.message ?? conversation.last_message
+              }
+            : conversation
+        )
+      );
+      setDraft("");
+      setPendingFiles([]);
+      setCallMenuOpen(false);
+      await loadContacts();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to leave group");
+    }
+  }
+
+  async function dissolveGroupById(groupId: string) {
+    if (!token || !me) {
+      return;
+    }
+    try {
+      const response = await api.dissolveGroup(token, groupId);
+      cacheConversationMessage(groupId, response.message);
+      setSelectedGroup((current) =>
+        current?.id === groupId ? { ...current, status: "dissolved", last_message: response.message ?? current.last_message } : current
+      );
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === groupId
+            ? { ...conversation, status: "dissolved" as const, last_message: response.message ?? conversation.last_message }
+            : conversation
+        )
+      );
+      setDraft("");
+      setPendingFiles([]);
+      setCallMenuOpen(false);
+      await loadContacts();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to disband group");
+    }
+  }
+
+  function askToLeaveSelectedGroup() {
+    if (!selectedGroup) {
+      return;
+    }
+    const group = selectedGroup;
+    setConversationMenuOpen(false);
+    setConfirmDialog({
+      title: "Leave Group",
+      body: `Leave ${groupTitle(group)}? You will keep the chat history, but you will no longer be able to send messages here.`,
+      confirmLabel: "Leave",
+      destructive: true,
+      onConfirm: () => leaveGroupById(group.id)
+    });
+  }
+
+  function askToDisbandSelectedGroup() {
+    if (!selectedGroup) {
+      return;
+    }
+    const group = selectedGroup;
+    setConversationMenuOpen(false);
+    setConfirmDialog({
+      title: "Disband Group",
+      body: `Disband ${groupTitle(group)}? Members will keep the chat history, but nobody will be able to send messages here.`,
+      confirmLabel: "Disband",
+      destructive: true,
+      onConfirm: () => dissolveGroupById(group.id)
+    });
+  }
+
   function confirmDialogAction() {
     const action = confirmDialog?.onConfirm;
     setConfirmDialog(null);
@@ -648,6 +814,9 @@ export default function App() {
   }
 
   function toggleVoiceRecording() {
+    if (!selectedConversationCanInteract) {
+      return;
+    }
     if (recordingState === "recording") {
       stopVoiceRecording();
     } else if (recordingState === "idle") {
@@ -726,6 +895,7 @@ export default function App() {
     setCallMenuOpen(false);
     setAddQuery("");
     setAddSearchResults([]);
+    setAddFriendStatus("");
     setInlineEdit(null);
     setConversationMenuOpen(false);
     setChatContextMenu(null);
@@ -733,6 +903,7 @@ export default function App() {
     setChatSearchOpen(false);
     setChatSearchQuery("");
     setEmojiPickerOpen(false);
+    setActiveMomentMenuId(null);
   }
 
   async function loadContacts(activeToken = token, activeUserNumber = me?.number) {
@@ -758,11 +929,184 @@ export default function App() {
     setGroupInvites(groupInviteData.invites);
   }
 
-  async function loadMessages(peer: User) {
+  async function loadMoments(activeToken = token, user = momentProfileUser) {
+    if (!activeToken) {
+      return;
+    }
+    setMomentsLoading(true);
+    setMomentStatus("");
+    try {
+      const response = user ? await api.userMoments(activeToken, user.number) : await api.moments(activeToken);
+      setMoments(response.moments);
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to load moments");
+    } finally {
+      setMomentsLoading(false);
+    }
+  }
+
+  async function loadMomentNotifications(activeToken = token) {
+    if (!activeToken) {
+      return;
+    }
+    try {
+      const response = await api.momentNotifications(activeToken);
+      setMomentNotifications(response.notifications);
+      setMomentUnreadCount(response.unread_count);
+    } catch {
+      // Interaction records are nice-to-have; keep chat flows quiet if this refresh fails.
+    }
+  }
+
+  async function openMomentNotifications() {
+    if (!token) {
+      return;
+    }
+    setMomentNotificationsOpen((open) => !open);
+    const response = await api.momentNotifications(token);
+    setMomentNotifications(response.notifications);
+    if (response.unread_count > 0) {
+      const read = await api.markMomentNotificationsRead(token);
+      setMomentUnreadCount(read.unread_count);
+      setMomentNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
+    } else {
+      setMomentUnreadCount(response.unread_count);
+    }
+  }
+
+  async function loadProfileMomentSummary(userNumber: string) {
+    if (!token) {
+      return;
+    }
+    try {
+      const response = await api.momentProfileSummary(token, userNumber);
+      setProfileMomentImages((current) => ({ ...current, [userNumber]: response.images }));
+    } catch {
+      setProfileMomentImages((current) => ({ ...current, [userNumber]: [] }));
+    }
+  }
+
+  function openUserMoments(user: User) {
+    setProfileCard(null);
+    setMomentProfileUser(user);
+    setActiveSection("moments");
+    setSelected(null);
+    setSelectedGroup(null);
+    replaceMessages([], "auto");
+    clearTransientUi();
+  }
+
+  async function saveMomentMotto() {
     if (!token || !me) {
       return;
     }
-    setActiveSection("chats");
+    try {
+      const response = await api.updateMe(token, { motto: momentMottoDraft });
+      storeMe(response.user);
+      setMomentMottoEditing(false);
+      setMomentStatus("");
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to save bio");
+    }
+  }
+
+  function updateMoment(nextMoment: MomentPost) {
+    setMoments((current) => current.map((moment) => (moment.id === nextMoment.id ? nextMoment : moment)));
+  }
+
+  function selectMomentImages(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []).filter((file) => file.type.startsWith("image/"));
+    event.currentTarget.value = "";
+    if (files.length === 0) {
+      return;
+    }
+    setMomentFiles((current) => [...current, ...files].slice(0, 9));
+  }
+
+  async function publishMoment() {
+    if (!token || (!momentDraft.trim() && momentFiles.length === 0)) {
+      return;
+    }
+    setMomentStatus("");
+    try {
+      const response = await api.createMoment(token, momentDraft, momentFiles);
+      setMoments((current) => [response.moment, ...current.filter((moment) => moment.id !== response.moment.id)]);
+      setMomentDraft("");
+      setMomentFiles([]);
+      setMomentsComposerOpen(false);
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to post moment");
+    }
+  }
+
+  async function toggleMomentLike(moment: MomentPost) {
+    if (!token) {
+      return;
+    }
+    try {
+      const response = moment.liked_by_me ? await api.unlikeMoment(token, moment.id) : await api.likeMoment(token, moment.id);
+      updateMoment(response.moment);
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to update like");
+    }
+  }
+
+  async function submitMomentComment(moment: MomentPost) {
+    if (!token) {
+      return;
+    }
+    const body = (momentCommentDrafts[moment.id] ?? "").trim();
+    if (!body) {
+      return;
+    }
+    try {
+      const response = await api.commentMoment(token, moment.id, body);
+      updateMoment(response.moment);
+      setMomentCommentDrafts((current) => ({ ...current, [moment.id]: "" }));
+      setActiveMomentCommentId(null);
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to comment");
+    }
+  }
+
+  async function deleteMomentPost(moment: MomentPost) {
+    if (!token) {
+      return;
+    }
+    try {
+      await api.deleteMoment(token, moment.id);
+      setMoments((current) => current.filter((item) => item.id !== moment.id));
+      setMomentCommentDrafts((current) => {
+        const next = { ...current };
+        delete next[moment.id];
+        return next;
+      });
+      setActiveMomentMenuId(null);
+      setActiveMomentCommentId((current) => (current === moment.id ? null : current));
+      loadProfileMomentSummary(moment.author.number).catch(() => undefined);
+    } catch (error) {
+      setMomentStatus(error instanceof Error ? error.message : "Failed to delete moment");
+    }
+  }
+
+  function askToDeleteMoment(moment: MomentPost) {
+    setActiveMomentMenuId(null);
+    setConfirmDialog({
+      title: "Delete Moment",
+      body: "Delete this moment? Friends will no longer see it, and related likes and comments will be removed.",
+      confirmLabel: "Delete",
+      destructive: true,
+      onConfirm: () => deleteMomentPost(moment)
+    });
+  }
+
+  async function loadMessages(peer: User, options: { switchToChats?: boolean } = {}) {
+    if (!token || !me) {
+      return;
+    }
+    if (options.switchToChats ?? true) {
+      setActiveSection("chats");
+    }
     clearTransientUi();
     setSelected(peer);
     setSelectedGroup(null);
@@ -783,11 +1127,13 @@ export default function App() {
     }
   }
 
-  async function loadGroupMessages(group: Conversation) {
+  async function loadGroupMessages(group: Conversation, options: { switchToChats?: boolean } = {}) {
     if (!token || !me) {
       return;
     }
-    setActiveSection("chats");
+    if (options.switchToChats ?? true) {
+      setActiveSection("chats");
+    }
     clearTransientUi();
     setSelected(null);
     setSelectedGroup(group);
@@ -866,6 +1212,7 @@ export default function App() {
     setAddFriendOpen(false);
     setAddQuery("");
     setAddSearchResults([]);
+    setAddFriendStatus("");
     setAddMenuOpen(false);
     setContactPickerMode(null);
     setPickedContacts([]);
@@ -902,7 +1249,7 @@ export default function App() {
     }
     setAccountStatus("");
     setAccountError("");
-    const payload: { nickname?: string; current_password?: string; new_password?: string } = {
+    const payload: { nickname?: string; motto?: string; current_password?: string; new_password?: string } = {
       nickname: accountNameDraft.trim()
     };
     if (newPasswordDraft || currentPasswordDraft || confirmPasswordDraft) {
@@ -952,14 +1299,16 @@ export default function App() {
   async function searchPeople() {
     if (!token || !addQuery.trim()) {
       setAddSearchResults([]);
+      setAddFriendStatus("");
       return;
     }
+    setAddFriendStatus("");
     try {
       const response = await api.searchUsers(token, addQuery);
       setAddSearchResults(response.users);
-      setStatus(response.users.length ? "" : "No matching users");
+      setAddFriendStatus(response.users.length ? "" : "No matching users");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Search failed");
+      setAddFriendStatus(error instanceof Error ? error.message : "Search failed");
     }
   }
 
@@ -969,14 +1318,18 @@ export default function App() {
     }
     try {
       const response = await api.requestFriend(token, receiver);
-      setStatus(response.status === "accepted" ? "Friend request accepted" : "Friend request sent");
+      const message = response.status === "accepted" ? "Friend request accepted" : "Friend request sent";
+      setAddFriendStatus(message);
+      setProfileStatus(message);
       setAddSearchResults([]);
       setAddQuery("");
       setAddFriendOpen(false);
       setProfileCard(null);
       await loadContacts();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Failed to send friend request");
+      const message = error instanceof Error ? error.message : "Failed to send friend request";
+      setAddFriendStatus(message);
+      setProfileStatus(message);
     }
   }
 
@@ -986,6 +1339,7 @@ export default function App() {
     setPickedContacts([]);
     setAddMenuOpen(false);
     setAddFriendOpen(false);
+    setAddFriendStatus("");
   }
 
   function closeContactPicker() {
@@ -995,22 +1349,81 @@ export default function App() {
   }
 
   function togglePickedContact(number: string) {
+    if (contactPickerMode === "transferOwner") {
+      setPickedContacts((current) => (current[0] === number ? [] : [number]));
+      return;
+    }
     setPickedContacts((current) =>
       current.includes(number) ? current.filter((item) => item !== number) : [...current, number]
     );
+  }
+
+  async function transferGroupOwnerById(groupId: string, owner: string) {
+    if (!token) {
+      return;
+    }
+    try {
+      const response = await api.transferGroupOwner(token, groupId, owner);
+      setSelectedGroup(response.conversation);
+      await loadContacts();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to transfer group owner");
+    }
+  }
+
+  function askToTransferGroupOwner(group: Conversation, owner: User) {
+    closeContactPicker();
+    setConversationMenuOpen(false);
+    setConfirmDialog({
+      title: "Transfer Group Owner",
+      body: `Transfer group ownership of ${groupTitle(group)} to ${displayName(owner)}?`,
+      confirmLabel: "Transfer",
+      destructive: true,
+      onConfirm: () => transferGroupOwnerById(group.id, owner.number)
+    });
   }
 
   async function confirmContactPicker() {
     if (!token || !contactPickerMode || pickedContacts.length === 0) {
       return;
     }
+    if (contactPickerMode === "transferOwner" && selectedGroup) {
+      const nextOwner =
+        contactPickerPeople.find((person) => person.number === pickedContacts[0]) ??
+        selectedGroup.members.find((person) => person.number === pickedContacts[0]);
+      if (nextOwner) {
+        askToTransferGroupOwner(selectedGroup, nextOwner);
+      }
+      return;
+    }
     try {
       if (contactPickerMode === "createGroup") {
         const response = await api.createGroup(token, { title: "", members: pickedContacts });
+        const snapshottedMessages = response.messages.map((message) => withGroupInviteSnapshot(message, response.conversation));
+        for (const message of snapshottedMessages) {
+          const peer = message.sender === me?.number ? message.receiver : message.sender;
+          if (me?.number) {
+            const cached = uniqueMessages([...readCachedMessages(me.number, peer).filter((item) => item.id !== message.id), message]);
+            writeCachedMessages(me.number, peer, cached);
+          }
+          setPreviewMessage(peer, message);
+        }
         await loadContacts();
         await loadGroupMessages(response.conversation);
       } else if (contactPickerMode === "inviteGroup" && selectedGroup) {
-        await api.inviteToGroup(token, selectedGroup.id, pickedContacts);
+        const response = await api.inviteToGroup(token, selectedGroup.id, pickedContacts);
+        const snapshottedMessages = response.messages.map((message) => withGroupInviteSnapshot(message, selectedGroup));
+        for (const message of snapshottedMessages) {
+          const peer = message.sender === me?.number ? message.receiver : message.sender;
+          if (me?.number) {
+            const cached = uniqueMessages([...readCachedMessages(me.number, peer).filter((item) => item.id !== message.id), message]);
+            writeCachedMessages(me.number, peer, cached);
+          }
+          setPreviewMessage(peer, message);
+          if (selected?.number === peer) {
+            appendMessages((current) => uniqueMessages([...current.filter((item) => item.id !== message.id), message]));
+          }
+        }
         await loadContacts();
       } else if (contactPickerMode === "kickGroup" && selectedGroup) {
         let latest = selectedGroup;
@@ -1089,10 +1502,6 @@ export default function App() {
       return;
     }
     await api.deleteFriend(token, friend);
-    if (selected?.number === friend) {
-      setSelected(null);
-      replaceMessages([], "auto");
-    }
     await loadContacts();
   }
 
@@ -1117,6 +1526,7 @@ export default function App() {
       x: Math.max(12, Math.min(rect.right + 10, window.innerWidth - 340)),
       y: Math.max(12, Math.min(rect.top, window.innerHeight - 340))
     });
+    loadProfileMomentSummary(user.number).catch(() => undefined);
   }
 
   function messageFromProfile() {
@@ -1189,6 +1599,13 @@ export default function App() {
       return null;
     }
     return friends.find((friend) => friend.number === callState.peerNumber) ?? selected ?? null;
+  }
+
+  function callConversation() {
+    if (callState.status === "idle" || !callState.conversationId) {
+      return null;
+    }
+    return conversations.find((conversation) => conversation.id === callState.conversationId) ?? selectedGroup ?? null;
   }
 
   function sendCallSignal(receiver: string, signal: CallSignal, conversationId?: string) {
@@ -1336,6 +1753,10 @@ export default function App() {
       setStatus("Select a chat before calling");
       return;
     }
+    if (!selectedConversationCanInteract) {
+      setStatus("This conversation is no longer active");
+      return;
+    }
     if (callState.status !== "idle") {
       setStatus("Finish the current call first");
       return;
@@ -1347,10 +1768,6 @@ export default function App() {
       : selected
         ? [selected.number]
         : [];
-    if (targets.length === 0) {
-      setStatus("No available call participants");
-      return;
-    }
     closeCallMedia();
     callStartedAtRef.current = null;
     const conversationId = selectedGroup?.id;
@@ -1464,11 +1881,19 @@ export default function App() {
 
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
-    if (!token || (!selected && !selectedGroup) || uploading || recordingState !== "idle" || (!draft.trim() && pendingFiles.length === 0)) {
+    if (
+      !token ||
+      (!selected && !selectedGroup) ||
+      !selectedConversationCanInteract ||
+      uploading ||
+      recordingState !== "idle" ||
+      (!draft.trim() && pendingFiles.length === 0)
+    ) {
       return;
     }
     const text = draft.trim();
     const filesToSend = pendingFiles;
+    let sentSomething = false;
     setDraft("");
     setPendingFiles([]);
     setUploadError("");
@@ -1483,6 +1908,7 @@ export default function App() {
           body: text
         })
       );
+      sentSomething = true;
     } else if (text) {
       const response = selectedGroup
         ? await api.sendConversationMessage(token, selectedGroup.id, text)
@@ -1496,10 +1922,15 @@ export default function App() {
         }
         return nextMessages;
       });
+      sentSomething = true;
     }
 
     if (filesToSend.length > 0) {
-      await uploadFiles(filesToSend);
+      sentSomething = (await uploadFiles(filesToSend)) || sentSomething;
+    }
+
+    if (sentSomething) {
+      setActiveSection("chats");
     }
   }
 
@@ -1509,7 +1940,7 @@ export default function App() {
     if (files.length === 0) {
       return;
     }
-    if (!token || (!selected && !selectedGroup)) {
+    if (!token || (!selected && !selectedGroup) || !selectedConversationCanInteract) {
       setUploadError("Select a chat before attaching files");
       return;
     }
@@ -1518,8 +1949,8 @@ export default function App() {
   }
 
   async function uploadFiles(files: File[]) {
-    if (!token || (!selected && !selectedGroup) || files.length === 0) {
-      return;
+    if (!token || (!selected && !selectedGroup) || !selectedConversationCanInteract || files.length === 0) {
+      return false;
     }
     setUploading(true);
     setUploadStatus(`Uploading ${files.length === 1 ? files[0].name : `${files.length} files`}...`);
@@ -1539,8 +1970,10 @@ export default function App() {
         });
       }
       setUploadStatus("");
+      return true;
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : "File upload failed");
+      return false;
     } finally {
       setUploading(false);
       setUploadStatus("");
@@ -1579,6 +2012,7 @@ export default function App() {
       }
       setStatus(error instanceof Error ? error.message : "Failed to load contacts");
     });
+    loadMomentNotifications(token).catch(() => undefined);
   }, [token, me?.number]);
 
   useEffect(() => {
@@ -1587,9 +2021,16 @@ export default function App() {
     }
     const interval = window.setInterval(() => {
       loadContacts(token, me.number).catch(() => undefined);
+      loadMomentNotifications(token).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(interval);
   }, [token, me?.number]);
+
+  useEffect(() => {
+    if (activeSection === "moments" && token) {
+      loadMoments(token, momentProfileUser).catch(() => undefined);
+    }
+  }, [activeSection, token, momentProfileUser?.number]);
 
   useEffect(() => {
     if (!me) {
@@ -1602,6 +2043,7 @@ export default function App() {
     setMutedPeers(readMutedPeers(me.number));
     setUnreadCounts(readUnreadCounts(me.number));
     setPinnedChatKeys(readPinnedChatKeys(me.number));
+    setMomentMottoDraft(me.motto || "");
     return migrateLegacyLocalCache(() => {
       setTheme(readTheme(me.number));
       setMutedPeers(readMutedPeers(me.number));
@@ -1609,6 +2051,17 @@ export default function App() {
       setPinnedChatKeys(readPinnedChatKeys(me.number));
     });
   }, [me?.number]);
+
+  const momentFilePreviews = useMemo(
+    () => momentFiles.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [momentFiles]
+  );
+
+  useEffect(() => {
+    return () => {
+      momentFilePreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    };
+  }, [momentFilePreviews]);
 
   useEffect(() => {
     const preventNativeContextMenu = (event: Event) => {
@@ -1620,8 +2073,8 @@ export default function App() {
 
   useEffect(() => {
     const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
-    setDockUnreadBadge(totalUnread);
-  }, [unreadCounts]);
+    setDockUnreadBadge(totalUnread + requests.length + momentUnreadCount);
+  }, [unreadCounts, requests.length, momentUnreadCount]);
 
   useEffect(() => {
     if (!appMenuOpen) {
@@ -1757,6 +2210,9 @@ export default function App() {
           return uniqueMessages([...current, message]);
         });
         loadContacts().catch(() => undefined);
+      } else if (payload.type === "error") {
+        setStatus(typeof payload.message === "string" ? payload.message : "Message could not be sent");
+        loadContacts().catch(() => undefined);
       } else if (payload.type === "call_signal") {
         handleCallSignal(payload.sender, payload.signal as CallSignal, payload.conversation_id).catch((error) => {
           setStatus(error instanceof Error ? error.message : "Call signaling failed");
@@ -1802,6 +2258,23 @@ export default function App() {
     }
     return groups.filter((conversation) => groupTitle(conversation).toLowerCase().includes(needle));
   }, [conversations, query]);
+  const directChatUsers = useMemo(() => {
+    const byNumber = new Map<string, User>();
+    for (const conversation of conversations) {
+      if (conversation.type === "direct" && conversation.peer) {
+        byNumber.set(conversation.peer.number, conversation.peer);
+      }
+    }
+    for (const friend of filteredFriends) {
+      byNumber.set(friend.number, friend);
+    }
+    const users = [...byNumber.values()];
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return users;
+    }
+    return users.filter((user) => displayName(user).toLowerCase().includes(needle) || user.number.toLowerCase().includes(needle));
+  }, [conversations, filteredFriends, query]);
   const pinnedChatKeySet = useMemo(() => new Set(pinnedChatKeys), [pinnedChatKeys]);
   function chatItemKey(item: ChatListItem) {
     return item.kind === "group" ? item.conversation.id : item.friend.number;
@@ -1825,7 +2298,7 @@ export default function App() {
     const searching = query.trim().length > 0;
     const items: ChatListItem[] = [
       ...groupConversations.map((conversation) => ({ kind: "group" as const, conversation })),
-      ...filteredFriends.map((friend) => ({ kind: "direct" as const, friend }))
+      ...directChatUsers.map((friend) => ({ kind: "direct" as const, friend }))
     ].filter((item) => {
       return searching || Boolean(previewMessages[chatItemKey(item)]);
     });
@@ -1837,7 +2310,7 @@ export default function App() {
       }
       return compareChatItems(a, b);
     });
-  }, [filteredFriends, groupConversations, pinnedChatKeySet, previewMessages, query]);
+  }, [directChatUsers, groupConversations, pinnedChatKeySet, previewMessages, query]);
   const pinnedChatListCount = useMemo(
     () => chatListItems.filter((item) => pinnedChatKeySet.has(chatItemKey(item))).length,
     [chatListItems, pinnedChatKeySet]
@@ -1851,6 +2324,18 @@ export default function App() {
       : activeSection === "newFriends"
         ? "New Friends"
         : "FeaChat";
+  const selectedGroupCanInteract = Boolean(selectedGroup && selectedGroup.status !== "dissolved" && selectedGroup.my_status !== "left");
+  const selectedDirectCanInteract = Boolean(selected && friendNumbers.has(selected.number));
+  const selectedConversationCanInteract = selectedGroup ? selectedGroupCanInteract : selected ? selectedDirectCanInteract : false;
+  const selectedConversationNotice = selectedGroup
+    ? selectedGroup.status === "dissolved"
+      ? "This group chat was disbanded. You can still view the history."
+      : selectedGroup.my_status === "left"
+        ? "You are no longer in this group. You can still view the history."
+        : ""
+    : selected && !selectedDirectCanInteract
+      ? "You are no longer friends. You can still view the history."
+      : "";
   const orderedMessages = useMemo(() => sortMessages(messages), [messages]);
   const filteredMessages = useMemo(() => {
     const query = chatSearchQuery.trim().toLowerCase();
@@ -1891,7 +2376,7 @@ export default function App() {
   const conversationPreviews = useMemo(() => {
     return Object.fromEntries(
       [
-        ...friends.map((friend) => {
+        ...directChatUsers.map((friend) => {
           const last = previewMessages[friend.number] ?? null;
           return [
             friend.number,
@@ -1917,7 +2402,7 @@ export default function App() {
         })
       ]
     );
-  }, [chatListPreviewText, friends, groupConversations, previewMessages]);
+  }, [chatListPreviewText, directChatUsers, groupConversations, previewMessages]);
   const contactGroups = useMemo(() => {
     const groups = new Map<string, User[]>();
     for (const friend of filteredFriends) {
@@ -1937,8 +2422,10 @@ export default function App() {
   const contactPickerPeople = useMemo(() => {
     const needle = contactPickerSearch.trim().toLowerCase();
     const source =
-      contactPickerMode === "kickGroup" && selectedGroup
-        ? selectedGroup.members.filter((member) => member.number !== me?.number)
+      (contactPickerMode === "kickGroup" || contactPickerMode === "transferOwner") && selectedGroup
+        ? selectedGroup.members.filter(
+            (member) => member.number !== me?.number && (contactPickerMode !== "transferOwner" || member.number !== selectedGroup.owner)
+          )
         : orderedFriends;
     return source.filter((user) => {
       if (!needle) {
@@ -1971,8 +2458,11 @@ export default function App() {
       ? "Start Group Chat"
       : contactPickerMode === "inviteGroup"
         ? "Add Members"
-        : "Remove Members";
-  const contactPickerAction = contactPickerMode === "kickGroup" ? "Remove" : "Finish";
+        : contactPickerMode === "transferOwner"
+          ? "Transfer Owner"
+          : "Remove Members";
+  const contactPickerAction =
+    contactPickerMode === "kickGroup" ? "Remove" : contactPickerMode === "transferOwner" ? "Transfer" : "Finish";
   const pendingGroupInviteIds = useMemo(() => new Set(groupInvites.map((invite) => invite.id)), [groupInvites]);
   const joinedGroupIds = useMemo(
     () => new Set(conversations.filter((conversation) => conversation.type === "group").map((conversation) => conversation.id)),
@@ -2040,8 +2530,11 @@ export default function App() {
     );
   }
 
+  const momentsOwner = momentProfileUser ?? me;
+  const canEditMomentMotto = momentsOwner.number === me.number;
+
   return (
-    <main className={`app-shell theme-${theme}`} onContextMenu={(event) => event.preventDefault()}>
+    <main className={`app-shell theme-${theme} ${activeSection === "moments" ? "moments-mode" : ""}`} onContextMenu={(event) => event.preventDefault()}>
       <WindowControls />
       <aside className="rail" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
         <button className="self-avatar" title="Profile" onClick={(event) => openProfileCard(event, me, false)}>
@@ -2077,6 +2570,8 @@ export default function App() {
           className={`rail-button ${activeSection === "moments" ? "active" : ""}`}
           onClick={() => {
             setActiveSection("moments");
+            setMomentProfileUser(null);
+            setMomentNotificationsOpen(false);
             setSelected(null);
             setSelectedGroup(null);
             replaceMessages([], "auto");
@@ -2084,6 +2579,7 @@ export default function App() {
           }}
         >
           <Aperture size={21} />
+          {momentUnreadCount > 0 && <span className="rail-badge">{momentUnreadCount}</span>}
         </button>
         <div className="rail-bottom" ref={appMenuRef}>
           <button className="rail-button" title="Menu" onClick={() => setAppMenuOpen((open) => !open)}>
@@ -2120,6 +2616,231 @@ export default function App() {
         </div>
       </aside>
 
+      {activeSection === "moments" && (
+        <section className="moments-view">
+          <div className="moments-drag-strip" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea} />
+          <div
+            className="moments-feed"
+            onMouseDown={(event) => {
+              if (!(event.target as HTMLElement).closest(".moment-more")) {
+                setActiveMomentMenuId(null);
+              }
+            }}
+          >
+            <section className="moments-hero">
+              <div className="moments-banner">
+                {momentProfileUser && (
+                  <button className="moments-back-button" type="button" onClick={() => setMomentProfileUser(null)}>
+                    Back
+                  </button>
+                )}
+                <div className="moments-hero-actions">
+                  <button className="moments-icon-button" type="button" onClick={openMomentNotifications} title="Notifications">
+                    <MessageSquare size={18} />
+                    {momentUnreadCount > 0 && <span className="rail-badge">{momentUnreadCount}</span>}
+                  </button>
+                  <button className="moments-share-button" type="button" onClick={() => setMomentsComposerOpen(true)}>
+                    <Camera size={17} />
+                    Share
+                  </button>
+                </div>
+              </div>
+              <div className="moments-profile">
+                <span>
+                  <strong>{displayName(momentsOwner)}</strong>
+                  {canEditMomentMotto && momentMottoEditing ? (
+                    <label className="moments-motto-edit">
+                      <input
+                        {...noTextAssist}
+                        autoFocus
+                        value={momentMottoDraft}
+                        placeholder="Bio"
+                        onChange={(event) => setMomentMottoDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            saveMomentMotto();
+                          }
+                        }}
+                      />
+                      <button type="button" onClick={saveMomentMotto}>
+                        <Check size={13} />
+                      </button>
+                    </label>
+                  ) : (
+                    <small className={canEditMomentMotto ? "editable-motto" : ""}>
+                      {momentsOwner.motto || "No bio yet"}
+                      {canEditMomentMotto && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMomentMottoDraft(me.motto || "");
+                            setMomentMottoEditing(true);
+                          }}
+                          title="Edit bio"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                      )}
+                    </small>
+                  )}
+                </span>
+                <button className="moments-avatar-button" type="button" onClick={(event) => openProfileCard(event, momentsOwner, momentsOwner.number !== me.number)}>
+                  <UserAvatar user={momentsOwner} />
+                </button>
+              </div>
+              {momentNotificationsOpen && (
+                <div className="moment-notification-panel">
+                  <header>
+                    <strong>Interactions</strong>
+                    <button type="button" onClick={() => setMomentNotificationsOpen(false)}>
+                      <X size={14} />
+                    </button>
+                  </header>
+                  {momentNotifications.length === 0 ? (
+                    <p>No interactions yet</p>
+                  ) : (
+                    momentNotifications.map((item) => (
+                      <button
+                        className={`moment-notification ${item.is_read ? "" : "unread"}`}
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setMomentNotificationsOpen(false);
+                          setMomentProfileUser(null);
+                        }}
+                      >
+                        <UserAvatar user={item.actor} />
+                        <span>
+                          <strong>{displayName(item.actor)}</strong>
+                          <small>
+                            {item.type === "like" ? "liked" : "commented on"} your moment
+                          </small>
+                          {item.comment_body && <em>{item.comment_body}</em>}
+                          <time>{formatMessageTimestamp(item.created_at)}</time>
+                        </span>
+                        {item.post_image ? <img src={api.fileUrl(item.post_image.url)} alt="" /> : <b>{item.post_body || "Moment"}</b>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </section>
+
+            {momentStatus && <p className="moments-status">{momentStatus}</p>}
+            {momentsLoading ? (
+              <p className="moments-empty">Loading moments...</p>
+            ) : moments.length === 0 ? (
+              <p className="moments-empty">No moments yet</p>
+            ) : (
+              moments.map((moment) => (
+                <article className="moment-card" key={moment.id}>
+                  <button className="moment-author-avatar" type="button" onClick={(event) => openProfileCard(event, moment.author, moment.author.number !== me.number)}>
+                    <UserAvatar user={moment.author} />
+                  </button>
+                  <div className="moment-body">
+                    <header>
+                      <strong>{displayName(moment.author)}</strong>
+                      <time>{formatMessageTimestamp(moment.created_at)}</time>
+                    </header>
+                    {moment.body && <p className="moment-text">{moment.body}</p>}
+                    {moment.images.length > 0 && (
+                      <div className={`moment-image-grid count-${Math.min(moment.images.length, 9)}`}>
+                        {moment.images.map((image) => (
+                          <a key={image.id} href={api.fileUrl(image.url)} target="_blank">
+                            <img src={api.fileUrl(image.url)} alt={image.name} />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    <div className="moment-actions">
+                      <button type="button" className={moment.liked_by_me ? "active" : ""} onClick={() => toggleMomentLike(moment)}>
+                        <Heart size={14} />
+                        {moment.liked_by_me ? "Liked" : "Like"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveMomentCommentId(moment.id);
+                          requestAnimationFrame(() => {
+                            const input = document.getElementById(`moment-comment-${moment.id}`);
+                            input?.focus();
+                          });
+                        }}
+                      >
+                        <MessageCircle size={14} />
+                        Comment
+                      </button>
+                      {moment.author.number === me.number && (
+                        <span className="moment-more">
+                          <button
+                            type="button"
+                            className="moment-more-button"
+                            onClick={() => setActiveMomentMenuId((current) => (current === moment.id ? null : moment.id))}
+                            title="More"
+                          >
+                            <MoreHorizontal size={16} />
+                          </button>
+                          {activeMomentMenuId === moment.id && (
+                            <span className="moment-more-menu">
+                              <button type="button" onClick={() => askToDeleteMoment(moment)}>
+                                <Trash2 size={13} />
+                                Delete Moment
+                              </button>
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    {(moment.likes.length > 0 || moment.comments.length > 0) && (
+                      <div className="moment-feedback">
+                        {moment.likes.length > 0 && (
+                          <div className="moment-likes">
+                            <Heart size={13} />
+                            <span>{moment.likes.map((user) => displayName(user)).join(", ")}</span>
+                          </div>
+                        )}
+                        {moment.comments.map((comment) => (
+                          <div className="moment-comment" key={comment.id}>
+                            <strong>{displayName(comment.author)}</strong>
+                            <span>{comment.body}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {(activeMomentCommentId === moment.id || (momentCommentDrafts[moment.id] ?? "").length > 0) && (
+                      <form
+                        className="moment-comment-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          submitMomentComment(moment);
+                        }}
+                      >
+                        <input
+                          id={`moment-comment-${moment.id}`}
+                          {...noTextAssist}
+                          placeholder="Comment"
+                          value={momentCommentDrafts[moment.id] ?? ""}
+                          onBlur={() => {
+                            if (!(momentCommentDrafts[moment.id] ?? "").trim()) {
+                              setActiveMomentCommentId(null);
+                            }
+                          }}
+                          onChange={(event) => setMomentCommentDrafts((current) => ({ ...current, [moment.id]: event.target.value }))}
+                        />
+                        <button type="submit" disabled={!(momentCommentDrafts[moment.id] ?? "").trim()}>
+                          Send
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="sidebar">
         <div className="search-row" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
           <div className="search-field">
@@ -2143,6 +2864,7 @@ export default function App() {
               onClick={(event) => {
                 event.stopPropagation();
                 setStatus("");
+                setAddFriendStatus("");
                 setAddMenuOpen((open) => !open);
                 setAddFriendOpen(false);
                 setAddSearchResults([]);
@@ -2165,6 +2887,7 @@ export default function App() {
                     setAddFriendOpen(true);
                     setAddQuery("");
                     setAddSearchResults([]);
+                    setAddFriendStatus("");
                   }}
                 >
                   <UserPlus size={20} />
@@ -2174,50 +2897,6 @@ export default function App() {
             )}
           </div>
         </div>
-        {status && <p className="inline-status">{status}</p>}
-        {addFriendOpen && (
-          <div className="add-friend-panel">
-            <div className="add-friend-search">
-              <Search size={15} />
-              <input
-                {...noTextAssist}
-                autoFocus
-                placeholder="FeaChat ID or name"
-                value={addQuery}
-                onChange={(event) => setAddQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    searchPeople();
-                  }
-                }}
-              />
-              <button type="button" onClick={searchPeople}>
-                Search
-              </button>
-            </div>
-            {addSearchResults.length > 0 && (
-              <div className="add-results">
-                {addSearchResults.map((user) => {
-                  return (
-                    <button
-                      className="person-row add-result-row"
-                      key={user.number}
-                      type="button"
-                      onClick={(event) => openProfileCard(event, user, friendNumbers.has(user.number))}
-                    >
-                      <UserAvatar user={user} />
-                      <span>
-                        <strong>{displayName(user)}</strong>
-                        <small>{user.number}</small>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
 
         {activeSection === "moments" ? (
           <div className="moments-placeholder">
@@ -2323,7 +3002,7 @@ export default function App() {
                             className={`person-row contact-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
                             onClick={() => {
                               if (selectedGroup?.id !== conversation.id) {
-                                loadGroupMessages(conversation);
+                                loadGroupMessages(conversation, { switchToChats: false });
                               }
                             }}
                           >
@@ -2344,7 +3023,7 @@ export default function App() {
                             className={`person-row contact-row ${selected?.number === friend.number ? "selected" : ""}`}
                             onClick={() => {
                               if (selected?.number !== friend.number) {
-                                loadMessages(friend);
+                                loadMessages(friend, { switchToChats: false });
                               }
                             }}
                           >
@@ -2445,7 +3124,7 @@ export default function App() {
             <>
               <h2>{selectedGroup ? groupTitle(selectedGroup) : displayName(selected!)}</h2>
               <div className="conversation-tools">
-                {(selected || selectedGroup) && (
+                {selectedConversationCanInteract && (
                   <div className="call-menu-anchor" ref={callMenuRef}>
                     <button
                       className={`conversation-more call-button ${callMenuOpen ? "active" : ""}`}
@@ -2524,6 +3203,16 @@ export default function App() {
                 const videoMessage = isVideoMessage(message);
                 const invitePending = inviteCard ? pendingGroupInviteIds.has(inviteCard.invite_id) : false;
                 const inviteJoined = inviteCard ? joinedGroupIds.has(inviteCard.conversation_id) : false;
+                if (message.type === "system") {
+                  return (
+                    <Fragment key={message.id}>
+                      {shouldShowTimestamp(filteredMessages, index) && (
+                        <div className="time-stamp">{formatMessageTimestamp(message.time)}</div>
+                      )}
+                      <div className="system-message">{message.message}</div>
+                    </Fragment>
+                  );
+                }
                 return (
                   <Fragment key={message.id}>
                     {shouldShowTimestamp(filteredMessages, index) && (
@@ -2541,8 +3230,15 @@ export default function App() {
                       >
                         {inviteCard ? (
                           <div className="group-invite-card">
-                            <strong>{inviteCard.title}</strong>
-                            <small>Group invite from {inviteCard.inviter}</small>
+                            <div className="group-invite-card-main">
+                              <span>
+                                <strong>{inviteCard.title}</strong>
+                                <small>Group invite from {inviteCard.inviter}</small>
+                              </span>
+                              {inviteCard.avatar_members?.length ? (
+                                <GroupInviteAvatar members={inviteCard.avatar_members} className="avatar group-invite-avatar group-avatar" />
+                              ) : null}
+                            </div>
                             {invitePending ? (
                               <button type="button" onClick={() => acceptInvite(inviteCard.invite_id)}>
                                 Accept Invite
@@ -2675,99 +3371,103 @@ export default function App() {
               })}
               <div ref={bottomRef} />
             </div>
-            <form className="composer" onSubmit={sendMessage}>
-              <textarea
-                ref={textareaRef}
-                {...noTextAssist}
-                placeholder=""
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    sendMessage(event);
-                  }
-                }}
-              />
-              <div className={`composer-meta ${pendingFiles.length > 0 || recordingState !== "idle" ? "active" : ""}`}>
-                {pendingFiles.length > 0 && (
-                  <div className="pending-files">
-                    {pendingFiles.map((file, index) => (
-                      <span key={`${file.name}-${file.size}-${index}`}>{file.name}</span>
-                    ))}
-                    <button type="button" onClick={() => setPendingFiles([])} title="Clear attachments">
-                      <X size={14} />
-                    </button>
-                  </div>
-                )}
-                {recordingState !== "idle" && (
-                  <div className="recording-pill">
-                    <span />
-                    {recordingState === "recording" ? `Recording ${recordingSeconds}s` : "Saving voice..."}
-                  </div>
-                )}
-              </div>
-              <div className="composer-actions">
-                <div className="emoji-anchor">
-                  <button
-                    type="button"
-                    className="composer-icon"
-                    title="Emoji"
-                    onClick={() => setEmojiPickerOpen((open) => !open)}
-                  >
-                    <Smile size={17} />
-                  </button>
-                  {emojiPickerOpen && (
-                    <div className="emoji-popover">
-                      <section>
-                        <strong>Emoji</strong>
-                        <div className="emoji-grid">
-                          {EMOJI_ITEMS.map((item) => (
-                            <button key={item} type="button" onClick={() => insertEmojiText(item)}>
-                              {item}
-                            </button>
-                          ))}
-                        </div>
-                      </section>
-                      <section>
-                        <strong>Kaomoji</strong>
-                        <div className="kaomoji-grid">
-                          {KAOMOJI_ITEMS.map((item) => (
-                            <button key={item} type="button" onClick={() => insertEmojiText(item)}>
-                              {item}
-                            </button>
-                          ))}
-                        </div>
-                      </section>
+            {selectedConversationCanInteract ? (
+              <form className="composer" onSubmit={sendMessage}>
+                <textarea
+                  ref={textareaRef}
+                  {...noTextAssist}
+                  placeholder=""
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      sendMessage(event);
+                    }
+                  }}
+                />
+                <div className={`composer-meta ${pendingFiles.length > 0 || recordingState !== "idle" ? "active" : ""}`}>
+                  {pendingFiles.length > 0 && (
+                    <div className="pending-files">
+                      {pendingFiles.map((file, index) => (
+                        <span key={`${file.name}-${file.size}-${index}`}>{file.name}</span>
+                      ))}
+                      <button type="button" onClick={() => setPendingFiles([])} title="Clear attachments">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  {recordingState !== "idle" && (
+                    <div className="recording-pill">
+                      <span />
+                      {recordingState === "recording" ? `Recording ${recordingSeconds}s` : "Saving voice..."}
                     </div>
                   )}
                 </div>
-                <button
-                  type="button"
-                  className={`composer-icon voice-record-button ${recordingState === "recording" ? "recording" : ""}`}
-                  disabled={uploading || recordingState === "stopping"}
-                  title={recordingState === "recording" ? "Stop recording" : "Record voice"}
-                  onClick={toggleVoiceRecording}
-                >
-                  {recordingState === "recording" ? <Square size={14} /> : <Mic size={17} />}
-                </button>
-                <button
-                  type="button"
-                  className="composer-icon"
-                  disabled={uploading}
-                  title="Attach image or file"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {uploading ? <ImageIcon size={17} /> : <Paperclip size={17} />}
-                </button>
-                <input ref={fileInputRef} className="file-input" type="file" multiple onChange={sendAttachments} />
-                <button className="send-button" type="submit" disabled={uploading || recordingState !== "idle" || (!draft.trim() && pendingFiles.length === 0)}>
-                  <Send size={16} />
-                  Send
-                </button>
-              </div>
-              {uploadStatus && <p className="conversation-status">{uploadStatus}</p>}
-            </form>
+                <div className="composer-actions">
+                  <div className="emoji-anchor">
+                    <button
+                      type="button"
+                      className="composer-icon"
+                      title="Emoji"
+                      onClick={() => setEmojiPickerOpen((open) => !open)}
+                    >
+                      <Smile size={17} />
+                    </button>
+                    {emojiPickerOpen && (
+                      <div className="emoji-popover">
+                        <section>
+                          <strong>Emoji</strong>
+                          <div className="emoji-grid">
+                            {EMOJI_ITEMS.map((item) => (
+                              <button key={item} type="button" onClick={() => insertEmojiText(item)}>
+                                {item}
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                        <section>
+                          <strong>Kaomoji</strong>
+                          <div className="kaomoji-grid">
+                            {KAOMOJI_ITEMS.map((item) => (
+                              <button key={item} type="button" onClick={() => insertEmojiText(item)}>
+                                {item}
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className={`composer-icon voice-record-button ${recordingState === "recording" ? "recording" : ""}`}
+                    disabled={uploading || recordingState === "stopping"}
+                    title={recordingState === "recording" ? "Stop recording" : "Record voice"}
+                    onClick={toggleVoiceRecording}
+                  >
+                    {recordingState === "recording" ? <Square size={14} /> : <Mic size={17} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-icon"
+                    disabled={uploading}
+                    title="Attach image or file"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {uploading ? <ImageIcon size={17} /> : <Paperclip size={17} />}
+                  </button>
+                  <input ref={fileInputRef} className="file-input" type="file" multiple onChange={sendAttachments} />
+                  <button className="send-button" type="submit" disabled={uploading || recordingState !== "idle" || (!draft.trim() && pendingFiles.length === 0)}>
+                    <Send size={16} />
+                    Send
+                  </button>
+                </div>
+                {uploadStatus && <p className="conversation-status">{uploadStatus}</p>}
+              </form>
+            ) : (
+              <div className="conversation-closed-note">{selectedConversationNotice}</div>
+            )}
             {conversationMenuOpen && (
               <aside className="conversation-settings" onMouseDown={(event) => event.stopPropagation()}>
                 <div className="conversation-members">
@@ -2784,13 +3484,15 @@ export default function App() {
                           <span>{member.group_alias || displayName(member)}</span>
                         </button>
                       ))}
-                      <button className="settings-member member-action" type="button" onClick={() => openContactPicker("inviteGroup")}>
-                        <span className="member-action-box">
-                          <Plus size={24} />
-                        </span>
-                        <span>Add</span>
-                      </button>
-                      {selectedGroup.owner === me.number && selectedGroup.members.length > 1 && (
+                      {selectedGroupCanInteract && (
+                        <button className="settings-member member-action" type="button" onClick={() => openContactPicker("inviteGroup")}>
+                          <span className="member-action-box">
+                            <Plus size={24} />
+                          </span>
+                          <span>Add</span>
+                        </button>
+                      )}
+                      {selectedGroupCanInteract && selectedGroup.owner === me.number && selectedGroup.members.length > 1 && (
                         <button className="settings-member member-action" type="button" onClick={() => openContactPicker("kickGroup")}>
                           <span className="member-action-box">
                             <Minus size={24} />
@@ -2808,7 +3510,8 @@ export default function App() {
                 </div>
                 {selectedGroup && (
                   <div className="group-details">
-                    {selectedGroup.owner === me.number && (
+                    {selectedConversationNotice && <p className="group-state-note">{selectedConversationNotice}</p>}
+                    {selectedGroupCanInteract && selectedGroup.owner === me.number && (
                       <div className="editable-row">
                         <span>Group Name</span>
                         {inlineEdit === "groupName" ? (
@@ -2861,21 +3564,29 @@ export default function App() {
                       ) : (
                         <strong>{selectedGroup.my_alias || "Not set"}</strong>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (inlineEdit === "groupAlias") {
-                            saveGroupAlias();
-                          } else {
-                            setGroupAliasDraft(selectedGroup.my_alias ?? "");
-                            setInlineEdit("groupAlias");
-                          }
-                        }}
-                        title={inlineEdit === "groupAlias" ? "Save" : "Edit"}
-                      >
-                        {inlineEdit === "groupAlias" ? <Check size={16} /> : <Pencil size={15} />}
-                      </button>
+                      {selectedGroupCanInteract && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (inlineEdit === "groupAlias") {
+                              saveGroupAlias();
+                            } else {
+                              setGroupAliasDraft(selectedGroup.my_alias ?? "");
+                              setInlineEdit("groupAlias");
+                            }
+                          }}
+                          title={inlineEdit === "groupAlias" ? "Save" : "Edit"}
+                        >
+                          {inlineEdit === "groupAlias" ? <Check size={16} /> : <Pencil size={15} />}
+                        </button>
+                      )}
                     </div>
+                    {selectedGroupCanInteract && selectedGroup.owner === me.number && selectedGroup.members.length > 1 && (
+                      <button className="settings-row compact-settings-row" type="button" onClick={() => openContactPicker("transferOwner")}>
+                        <span>Transfer Group Owner</span>
+                        <span className="row-chevron">›</span>
+                      </button>
+                    )}
                   </div>
                 )}
                 <button
@@ -2894,9 +3605,21 @@ export default function App() {
 	                  <input type="checkbox" checked={mutedPeers.has(selectedGroup?.id ?? selected!.number)} onChange={toggleMuteSelected} />
 	                  <span className="switch-track" aria-hidden="true" />
 	                </label>
-                <button className="settings-row clear-row" type="button" onClick={clearConversation}>
-                  Clear Chat History
-                </button>
+                <div className="danger-actions">
+                  <button className="settings-row clear-row" type="button" onClick={clearConversation}>
+                    Clear Chat History
+                  </button>
+                  {selectedGroup && selectedGroupCanInteract && selectedGroup.owner !== me.number && (
+                    <button className="settings-row clear-row" type="button" onClick={askToLeaveSelectedGroup}>
+                      Leave Group
+                    </button>
+                  )}
+                  {selectedGroup && selectedGroupCanInteract && selectedGroup.owner === me.number && (
+                    <button className="settings-row clear-row" type="button" onClick={askToDisbandSelectedGroup}>
+                      Disband Group
+                    </button>
+                  )}
+                </div>
               </aside>
             )}
           </>
@@ -2908,6 +3631,58 @@ export default function App() {
           </div>
         )}
       </section>
+
+      {momentsComposerOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setMomentsComposerOpen(false)}>
+          <section className="moment-compose-card" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <h3>Share Moment</h3>
+              <button type="button" onClick={() => setMomentsComposerOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <textarea
+              {...noTextAssist}
+              autoFocus
+              placeholder="What's happening?"
+              value={momentDraft}
+              onChange={(event) => setMomentDraft(event.target.value)}
+            />
+            {momentFiles.length > 0 && (
+              <div className="moment-compose-grid">
+                {momentFilePreviews.map((preview, index) => (
+                  <span key={`${preview.file.name}-${preview.file.size}-${index}`}>
+                    <img src={preview.url} alt="" />
+                    <button
+                      type="button"
+                      onClick={() => setMomentFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="moment-compose-actions">
+              <button type="button" onClick={() => momentFileInputRef.current?.click()} disabled={momentFiles.length >= 9}>
+                <ImageIcon size={15} />
+                Images
+              </button>
+              <small>{momentFiles.length}/9</small>
+              <span />
+              <button
+                className="primary"
+                type="button"
+                onClick={publishMoment}
+                disabled={!momentDraft.trim() && momentFiles.length === 0}
+              >
+                Post
+              </button>
+            </div>
+            <input ref={momentFileInputRef} className="file-input" type="file" accept="image/*" multiple onChange={selectMomentImages} />
+          </section>
+        </div>
+      )}
 
       {chatContextMenu && (
         <div
@@ -2986,6 +3761,7 @@ export default function App() {
         <div className="call-overlay">
           {(() => {
             const peer = callPeerUser();
+            const callGroup = callConversation();
             const remoteEntries = Object.entries(remoteStreams);
             const statusLabel =
               callState.status === "incoming"
@@ -3000,7 +3776,13 @@ export default function App() {
             return (
               <section className={`call-card call-${callState.mode}`}>
                 <div className="call-header">
-                  {peer ? <UserAvatar user={peer} className="avatar call-avatar" /> : <span className="avatar call-avatar">{callState.peerName.charAt(0)}</span>}
+                  {callGroup ? (
+                    <GroupAvatar conversation={callGroup} className="avatar call-avatar group-avatar" />
+                  ) : peer ? (
+                    <UserAvatar user={peer} className="avatar call-avatar" />
+                  ) : (
+                    <span className="avatar call-avatar">{callState.peerName.charAt(0)}</span>
+                  )}
                   <span>
                     <strong>{callState.peerName}</strong>
                     <small>{statusLabel}</small>
@@ -3072,6 +3854,74 @@ export default function App() {
               </section>
             );
           })()}
+        </div>
+      )}
+
+      {addFriendOpen && (
+        <div
+          className="add-friend-backdrop"
+          onMouseDown={() => {
+            setAddFriendOpen(false);
+            setAddQuery("");
+            setAddSearchResults([]);
+            setAddFriendStatus("");
+          }}
+        >
+          <section className="add-friend-dialog" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <h2>Add Contacts</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setAddFriendOpen(false);
+                  setAddQuery("");
+                  setAddSearchResults([]);
+                  setAddFriendStatus("");
+                }}
+                title="Close"
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="add-friend-dialog-search">
+              <Search size={16} />
+              <input
+                {...noTextAssist}
+                autoFocus
+                placeholder="FeaChat ID or name"
+                value={addQuery}
+                onChange={(event) => setAddQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    searchPeople();
+                  }
+                }}
+              />
+              <button type="button" onClick={searchPeople}>
+                Search
+              </button>
+            </div>
+            {addFriendStatus && <p className="add-friend-dialog-status">{addFriendStatus}</p>}
+            <div className="add-friend-dialog-results">
+              {addSearchResults.map((user) => (
+                <button
+                  className="person-row add-result-row"
+                  key={user.number}
+                  type="button"
+                  onClick={(event) => {
+                    openProfileCard(event, user, friendNumbers.has(user.number));
+                  }}
+                >
+                  <UserAvatar user={user} />
+                  <span>
+                    <strong>{displayName(user)}</strong>
+                    <small>{user.number}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
         </div>
       )}
 
@@ -3186,6 +4036,24 @@ export default function App() {
                       </button>
                     )}
                   </div>
+                  <div className="profile-info-row">
+                    <span>Bio</span>
+                    <strong>{profileCard.user.motto || "None"}</strong>
+                  </div>
+                  <button className="profile-moments-row" type="button" onClick={() => openUserMoments(profileCard.user)}>
+                    <span>Moments</span>
+                    <strong>
+                      {(profileMomentImages[profileCard.user.number] ?? []).length > 0 ? (
+                        <span className="profile-moment-thumbs">
+                          {(profileMomentImages[profileCard.user.number] ?? []).slice(0, 4).map((image) => (
+                            <img key={image.id} src={api.fileUrl(image.url)} alt="" />
+                          ))}
+                        </span>
+                      ) : (
+                        "No moments"
+                      )}
+                    </strong>
+                  </button>
                 </div>
                 {profileCard.relation === "friend" && (
                   <div className="profile-actions">
@@ -3369,7 +4237,6 @@ export default function App() {
                         <small>Current WeChat-style dark rail</small>
                       </button>
                     </div>
-                    <p className="settings-note">Saved locally for {displayName(me)}.</p>
                   </div>
                 )}
               </div>

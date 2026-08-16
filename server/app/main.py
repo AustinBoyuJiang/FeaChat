@@ -3,7 +3,7 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -16,9 +16,11 @@ from .schemas import (
     GroupAliasUpdate,
     GroupCreate,
     GroupInviteCreate,
+    GroupOwnerUpdate,
     GroupUpdate,
     LoginRequest,
     MessageCreate,
+    MomentCommentCreate,
     RegisterRequest,
 )
 from .services import (
@@ -28,8 +30,10 @@ from .services import (
     conversation_members,
     create_group,
     create_group_invites,
+    create_moment,
     create_friend_request,
     delete_friend,
+    delete_moment,
     list_friend_request_history,
     list_friend_requests,
     list_friends,
@@ -37,10 +41,19 @@ from .services import (
     list_conversations,
     list_group_invites,
     list_messages,
+    list_moments,
+    list_moment_notifications,
+    list_user_moments,
     login_user,
+    mark_moment_notifications_read,
+    moment_profile_summary,
+    moment_unread_count,
     register_user,
     reject_friend_request,
+    comment_on_moment,
+    require_active_conversation_member,
     require_conversation_member,
+    require_message_permission,
     require_user,
     save_attachment_message,
     save_conversation_attachment_message,
@@ -48,7 +61,13 @@ from .services import (
     save_message,
     search_users,
     sessions,
+    like_moment,
+    unlike_moment,
+    dissolve_group,
+    leave_group,
+    active_conversation_participants,
     remove_group_member,
+    transfer_group_owner,
     update_group,
     update_group_alias,
     update_friend_profile,
@@ -137,7 +156,7 @@ def me(number: str = Depends(current_user)):
 
 @app.patch("/api/me")
 def edit_me(payload: AccountUpdate, number: str = Depends(current_user)):
-    return update_account(db, number, payload.nickname, payload.current_password, payload.new_password)
+    return update_account(db, number, payload.nickname, payload.motto, payload.current_password, payload.new_password)
 
 
 @app.post("/api/me/avatar")
@@ -198,6 +217,83 @@ def edit_friend_profile(friend: str, payload: FriendProfileUpdate, number: str =
     return update_friend_profile(db, number, friend, payload.alias, payload.tags)
 
 
+@app.get("/api/moments")
+def moments(limit: int = Query(default=50), number: str = Depends(current_user)):
+    return {"moments": list_moments(db, number, limit)}
+
+
+@app.get("/api/moments/notifications")
+def moment_notifications(number: str = Depends(current_user)):
+    return {
+        "notifications": list_moment_notifications(db, number),
+        "unread_count": moment_unread_count(db, number),
+    }
+
+
+@app.post("/api/moments/notifications/read")
+def read_moment_notifications(number: str = Depends(current_user)):
+    mark_moment_notifications_read(db, number)
+    return {"unread_count": moment_unread_count(db, number)}
+
+
+@app.get("/api/moments/users/{user_number}")
+def user_moments(user_number: str, limit: int = Query(default=50), number: str = Depends(current_user)):
+    return {"moments": list_user_moments(db, number, user_number, limit)}
+
+
+@app.get("/api/moments/users/{user_number}/summary")
+def user_moment_summary(user_number: str, number: str = Depends(current_user)):
+    return moment_profile_summary(db, number, user_number)
+
+
+@app.post("/api/moments")
+async def create_moment_post(
+    body: str = Form(default=""),
+    files: list[UploadFile] = File(default=[]),
+    number: str = Depends(current_user),
+):
+    if len(files) > 9:
+        for file in files:
+            await file.close()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A moment can include at most 9 images")
+    stored_images = []
+    try:
+        for file in files:
+            if not (file.content_type or "").startswith("image/"):
+                await file.close()
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Moments only support image attachments")
+            stored_images.append(await persist_upload(file))
+        moment = create_moment(db, number, body, stored_images)
+    except Exception:
+        for _, stored_name, _, _ in stored_images:
+            (settings.upload_dir / stored_name).unlink(missing_ok=True)
+        raise
+    return {"moment": moment}
+
+
+@app.post("/api/moments/{post_id}/like")
+def like_moment_post(post_id: int, number: str = Depends(current_user)):
+    return {"moment": like_moment(db, number, post_id)}
+
+
+@app.delete("/api/moments/{post_id}")
+def delete_moment_post(post_id: int, number: str = Depends(current_user)):
+    result = delete_moment(db, number, post_id)
+    for stored_name in result["files"]:
+        (settings.upload_dir / stored_name).unlink(missing_ok=True)
+    return {"status": result["status"], "post_id": result["post_id"]}
+
+
+@app.delete("/api/moments/{post_id}/like")
+def unlike_moment_post(post_id: int, number: str = Depends(current_user)):
+    return {"moment": unlike_moment(db, number, post_id)}
+
+
+@app.post("/api/moments/{post_id}/comments")
+def comment_moment_post(post_id: int, payload: MomentCommentCreate, number: str = Depends(current_user)):
+    return {"moment": comment_on_moment(db, number, post_id, payload.body)}
+
+
 @app.get("/api/conversations")
 def conversations(number: str = Depends(current_user)):
     return {"conversations": list_conversations(db, number)}
@@ -217,8 +313,11 @@ def group_invites(number: str = Depends(current_user)):
 
 
 @app.post("/api/groups/invites/{invite_id}/accept")
-def accept_group_invite(invite_id: int, number: str = Depends(current_user)):
-    return answer_group_invite(db, number, invite_id, True)
+async def accept_group_invite(invite_id: int, number: str = Depends(current_user)):
+    result = answer_group_invite(db, number, invite_id, True)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=active_conversation_participants(db, result["invite"]["conversation_id"]))
+    return result
 
 
 @app.post("/api/groups/invites/{invite_id}/reject")
@@ -235,8 +334,11 @@ async def invite_to_group(conversation_id: str, payload: GroupInviteCreate, numb
 
 
 @app.patch("/api/conversations/{conversation_id}")
-def edit_group(conversation_id: str, payload: GroupUpdate, number: str = Depends(current_user)):
-    return update_group(db, number, conversation_id, payload.title)
+async def edit_group(conversation_id: str, payload: GroupUpdate, number: str = Depends(current_user)):
+    result = update_group(db, number, conversation_id, payload.title)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=active_conversation_participants(db, conversation_id))
+    return result
 
 
 @app.patch("/api/conversations/{conversation_id}/me")
@@ -244,9 +346,39 @@ def edit_group_alias(conversation_id: str, payload: GroupAliasUpdate, number: st
     return update_group_alias(db, number, conversation_id, payload.alias)
 
 
+@app.delete("/api/conversations/{conversation_id}/me")
+async def leave_group_chat(conversation_id: str, number: str = Depends(current_user)):
+    recipients = active_conversation_participants(db, conversation_id)
+    result = leave_group(db, number, conversation_id)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=recipients)
+    return result
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def dissolve_group_chat(conversation_id: str, number: str = Depends(current_user)):
+    recipients = active_conversation_participants(db, conversation_id)
+    result = dissolve_group(db, number, conversation_id)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=recipients)
+    return result
+
+
 @app.delete("/api/conversations/{conversation_id}/members/{member}")
-def kick_group_member(conversation_id: str, member: str, number: str = Depends(current_user)):
-    return remove_group_member(db, number, conversation_id, member)
+async def kick_group_member(conversation_id: str, member: str, number: str = Depends(current_user)):
+    recipients = active_conversation_participants(db, conversation_id)
+    result = remove_group_member(db, number, conversation_id, member)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=recipients)
+    return result
+
+
+@app.patch("/api/conversations/{conversation_id}/owner")
+async def transfer_group_chat_owner(conversation_id: str, payload: GroupOwnerUpdate, number: str = Depends(current_user)):
+    result = transfer_group_owner(db, number, conversation_id, payload.owner)
+    if result.get("message"):
+        await manager.broadcast_message(result["message"], recipients=active_conversation_participants(db, conversation_id))
+    return result
 
 
 @app.get("/api/conversations/by-id/{conversation_id}/messages")
@@ -304,7 +436,13 @@ def download_file(stored_name: str, download: bool = Query(default=False)):
     if "/" in stored_name or "\\" in stored_name:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
     row = db.fetchone(
-        "SELECT original_name, mime_type FROM attachments WHERE stored_name = ?",
+        """
+        SELECT original_name, mime_type FROM attachments WHERE stored_name = ?
+        UNION ALL
+        SELECT original_name, mime_type FROM moment_images WHERE stored_name = ?
+        LIMIT 1
+        """,
+        stored_name,
         stored_name,
     )
     path = settings.upload_dir / stored_name
@@ -379,13 +517,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
                 if not body or not (receiver or conversation_id):
                     await websocket.send_json({"type": "error", "message": "Missing receiver/conversation or body"})
                     continue
-                if conversation_id:
-                    message = save_conversation_message(db, number, conversation_id, payload.get("message_type", "text"), body)
-                    recipients = [member["number"] for member in conversation_members(db, conversation_id)]
-                    await manager.broadcast_message(message, recipients=recipients)
-                else:
-                    message = save_message(db, number, receiver, payload.get("message_type", "text"), body)
-                    await manager.broadcast_message(message)
+                try:
+                    if conversation_id:
+                        message = save_conversation_message(db, number, conversation_id, payload.get("message_type", "text"), body)
+                        recipients = [member["number"] for member in conversation_members(db, conversation_id)]
+                        await manager.broadcast_message(message, recipients=recipients)
+                    else:
+                        message = save_message(db, number, receiver, payload.get("message_type", "text"), body)
+                        await manager.broadcast_message(message)
+                except HTTPException as error:
+                    await websocket.send_json({"type": "error", "message": str(error.detail)})
             elif payload.get("type") == "call_signal":
                 receiver = str(payload.get("receiver", "")).strip()
                 conversation_id = str(payload.get("conversation_id", "")).strip()
@@ -393,28 +534,32 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(def
                 if not (receiver or conversation_id) or not isinstance(signal, dict):
                     await websocket.send_json({"type": "error", "message": "Missing call receiver or signal"})
                     continue
-                if conversation_id:
-                    require_conversation_member(db, conversation_id, number)
-                    recipients = [member["number"] for member in conversation_members(db, conversation_id) if member["number"] != number]
-                    for recipient in recipients:
-                        await manager.send_to_user(
-                            recipient,
-                            {
-                                "type": "call_signal",
-                                "sender": number,
-                                "conversation_id": conversation_id,
-                                "signal": signal,
-                            },
-                        )
-                    continue
-                await manager.send_to_user(
-                    receiver,
-                    {
-                        "type": "call_signal",
-                        "sender": number,
-                        "signal": signal,
-                    },
-                )
+                try:
+                    if conversation_id:
+                        require_active_conversation_member(db, conversation_id, number)
+                        recipients = [member["number"] for member in conversation_members(db, conversation_id) if member["number"] != number]
+                        for recipient in recipients:
+                            await manager.send_to_user(
+                                recipient,
+                                {
+                                    "type": "call_signal",
+                                    "sender": number,
+                                    "conversation_id": conversation_id,
+                                    "signal": signal,
+                                },
+                            )
+                        continue
+                    require_message_permission(db, number, receiver)
+                    await manager.send_to_user(
+                        receiver,
+                        {
+                            "type": "call_signal",
+                            "sender": number,
+                            "signal": signal,
+                        },
+                    )
+                except HTTPException as error:
+                    await websocket.send_json({"type": "error", "message": str(error.detail)})
             elif payload.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             else:

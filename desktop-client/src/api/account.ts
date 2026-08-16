@@ -5,7 +5,7 @@ export function me(token: string) {
   return request<{ user: User }>("/api/me", { token });
 }
 
-export function updateMe(token: string, payload: { nickname?: string; current_password?: string; new_password?: string }) {
+export function updateMe(token: string, payload: { nickname?: string; motto?: string; current_password?: string; new_password?: string }) {
   return request<{ user: User }>("/api/me", {
     token,
     method: "PATCH",

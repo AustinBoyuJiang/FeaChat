@@ -44,6 +44,7 @@ export type FriendRequestRecord = User & {
 export type ConversationMember = User & {
   role: "owner" | "member";
   group_alias: string;
+  joined_at?: string;
 };
 
 export type Conversation = {
@@ -54,6 +55,8 @@ export type Conversation = {
   members: ConversationMember[];
   owner: string | null;
   my_alias: string;
+  status?: "active" | "inactive" | "dissolved";
+  my_status?: "active" | "left";
   last_message: Message | null;
 };
 
@@ -71,4 +74,54 @@ export type GroupInvite = {
     owner: string;
     members: ConversationMember[];
   };
+};
+
+export type MomentImage = {
+  id: number;
+  name: string;
+  url: string;
+  mime_type: string;
+  size: number;
+};
+
+export type MomentComment = {
+  id: number;
+  post_id: number;
+  author: User;
+  body: string;
+  created_at: string;
+};
+
+export type MomentPost = {
+  id: number;
+  author: User;
+  body: string;
+  images: MomentImage[];
+  likes: User[];
+  liked_by_me: boolean;
+  comments: MomentComment[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type MomentNotification = {
+  id: number;
+  post_id: number;
+  type: "like" | "comment";
+  is_read: boolean;
+  created_at: string;
+  actor: User;
+  comment_body: string;
+  post_body: string;
+  post_image: {
+    name: string;
+    url: string;
+    mime_type: string;
+    size: number;
+  } | null;
+};
+
+export type MomentProfileSummary = {
+  user: User;
+  images: MomentImage[];
 };

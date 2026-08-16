@@ -6,6 +6,20 @@ export type CallMessagePayload = {
   outcome: "ended" | "canceled" | "declined";
   duration_seconds?: number | null;
 };
+export type GroupInviteAvatarMember = {
+  number: string;
+  nickname: string;
+  display_name?: string;
+  avatar_url?: string | null;
+  avatar_color?: string | null;
+};
+export type GroupInvitePayload = {
+  invite_id: number;
+  conversation_id: string;
+  title: string;
+  inviter: string;
+  avatar_members?: GroupInviteAvatarMember[];
+};
 
 export function uniqueMessages(messages: Message[]) {
   const seen = new Set<number>();
@@ -90,6 +104,9 @@ export function formatBytes(size: number) {
 }
 
 export function messagePreview(message: Message) {
+  if (message.type === "system") {
+    return message.message || "[System]";
+  }
   if (message.type === "group_invite") {
     const invite = parseGroupInviteMessage(message);
     return invite?.title ? `[Group Invite] ${invite.title}` : "[Group Invite]";
@@ -173,7 +190,7 @@ export function parseGroupInviteMessage(message: Message) {
     return null;
   }
   try {
-    return JSON.parse(message.message) as { invite_id: number; conversation_id: string; title: string; inviter: string };
+    return JSON.parse(message.message) as GroupInvitePayload;
   } catch {
     return null;
   }

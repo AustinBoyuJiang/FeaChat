@@ -145,7 +145,14 @@ def login_user(database: Database, number: str, password: str):
     return {"token": token, "user": public_user(row)}
 
 
-def update_account(database: Database, current_user: str, nickname: str | None, current_password: str | None, new_password: str | None):
+def update_account(
+    database: Database,
+    current_user: str,
+    nickname: str | None,
+    motto: str | None,
+    current_password: str | None,
+    new_password: str | None,
+):
     row = database.fetchone(
         "SELECT number, password_hash FROM users WHERE number = ?",
         current_user,
@@ -157,6 +164,9 @@ def update_account(database: Database, current_user: str, nickname: str | None, 
     if nickname is not None:
         updates.append("nickname = ?")
         params.append(nickname.strip()[:48])
+    if motto is not None:
+        updates.append("motto = ?")
+        params.append(motto.strip()[:120])
     if new_password is not None:
         if not current_password or not verify_password(current_password, row["password_hash"]):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Current password is incorrect")
@@ -369,10 +379,10 @@ def delete_friend(database: Database, current_user: str, friend: str):
 def member_row(database: Database, conversation_id: str, user_number: str):
     return database.fetchone(
         """
-        SELECT c.id, c.type, c.title, c.owner, cm.role, cm.alias, cm.status
+        SELECT c.id, c.type, c.title, c.owner, c.status AS conversation_status, cm.role, cm.alias, cm.status, cm.left_at, cm.left_message_id
         FROM conversations c
         JOIN conversation_members cm ON cm.conversation_id = c.id
-        WHERE c.id = ? AND cm.user_number = ? AND cm.status = 'active'
+        WHERE c.id = ? AND cm.user_number = ?
         """,
         conversation_id,
         user_number,
@@ -386,8 +396,15 @@ def require_conversation_member(database: Database, conversation_id: str, user_n
     return row
 
 
-def require_group_owner(database: Database, conversation_id: str, user_number: str):
+def require_active_conversation_member(database: Database, conversation_id: str, user_number: str):
     row = require_conversation_member(database, conversation_id, user_number)
+    if row["conversation_status"] != "active" or row["status"] != "active":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Conversation is no longer active")
+    return row
+
+
+def require_group_owner(database: Database, conversation_id: str, user_number: str):
+    row = require_active_conversation_member(database, conversation_id, user_number)
     if row["type"] != "group":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not a group conversation")
     if row["owner"] != user_number:
@@ -398,11 +415,11 @@ def require_group_owner(database: Database, conversation_id: str, user_number: s
 def conversation_members(database: Database, conversation_id: str):
     rows = database.fetchall(
         """
-        SELECT u.number, u.nickname, u.avatar, u.avatar_file, u.avatar_mime_type, u.avatar_color, u.background, u.gender, u.motto, cm.role, cm.alias
+        SELECT u.number, u.nickname, u.avatar, u.avatar_file, u.avatar_mime_type, u.avatar_color, u.background, u.gender, u.motto, cm.role, cm.alias, cm.joined_at
         FROM conversation_members cm
         JOIN users u ON u.number = cm.user_number
         WHERE cm.conversation_id = ? AND cm.status = 'active'
-        ORDER BY CASE WHEN cm.role = 'owner' THEN 0 ELSE 1 END, lower(u.nickname), u.number
+        ORDER BY CASE WHEN cm.role = 'owner' THEN 0 ELSE 1 END, cm.joined_at, lower(u.nickname), u.number
         """,
         conversation_id,
     )
@@ -411,8 +428,45 @@ def conversation_members(database: Database, conversation_id: str):
         user = public_user(row)
         user["role"] = row["role"]
         user["group_alias"] = row["alias"] or ""
+        user["joined_at"] = utc_timestamp(row["joined_at"])
         members.append(user)
     return members
+
+
+def conversation_participants(database: Database, conversation_id: str):
+    rows = database.fetchall(
+        """
+        SELECT user_number
+        FROM conversation_members
+        WHERE conversation_id = ?
+        ORDER BY joined_at, user_number
+        """,
+        conversation_id,
+    )
+    return [row["user_number"] for row in rows]
+
+
+def active_conversation_participants(database: Database, conversation_id: str):
+    rows = database.fetchall(
+        """
+        SELECT user_number
+        FROM conversation_members
+        WHERE conversation_id = ? AND status = 'active'
+        ORDER BY joined_at, user_number
+        """,
+        conversation_id,
+    )
+    return [row["user_number"] for row in rows]
+
+
+def visible_message_cutoff_for_member(row):
+    if row is None or row["status"] != "left":
+        return None
+    if row["left_message_id"]:
+        return ("id", row["left_message_id"])
+    if row["left_at"]:
+        return ("time", row["left_at"])
+    return None
 
 
 def last_message_for_conversation(database: Database, conversation_id: str, current_user: str, peer: str | None = None):
@@ -448,8 +502,14 @@ def last_message_for_conversation(database: Database, conversation_id: str, curr
             current_user,
         )
     else:
+        member = member_row(database, conversation_id, current_user)
+        cutoff = visible_message_cutoff_for_member(member)
+        visibility_clause = f"AND m.{cutoff[0]} <= ?" if cutoff else ""
+        params = [conversation_id]
+        if cutoff:
+            params.append(cutoff[1])
         row = database.fetchone(
-            """
+            f"""
             SELECT
                 m.id,
                 m.conversation_id,
@@ -468,18 +528,57 @@ def last_message_for_conversation(database: Database, conversation_id: str, curr
             FROM messages m
             LEFT JOIN attachments a ON a.message_id = m.id
             WHERE m.conversation_id = ?
+            {visibility_clause}
             ORDER BY m.id DESC
             LIMIT 1
             """,
-            conversation_id,
+            *params,
         )
     return message_from_row(row) if row else None
 
 
+def user_for_direct_conversation(database: Database, current_user: str, peer: str) -> dict:
+    row = database.fetchone(
+        """
+        SELECT u.number, u.nickname, u.avatar, u.avatar_file, u.avatar_mime_type, u.avatar_color, u.background, u.gender, u.motto, f.alias, f.tags
+        FROM users u
+        LEFT JOIN friendships f ON f.owner = ? AND f.friend = u.number
+        WHERE u.number = ?
+        """,
+        current_user,
+        peer,
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    return friend_user(row) if row["alias"] is not None else {**public_user(row), "display_name": public_user(row)["nickname"], "tags": []}
+
+
 def list_conversations(database: Database, current_user: str):
-    direct_items = []
+    direct_peers = {}
     for friend in list_friends(database, current_user):
-        conversation_id = ensure_direct_conversation(database, current_user, friend["number"])
+        direct_peers[friend["number"]] = friend
+        ensure_direct_conversation(database, current_user, friend["number"])
+
+    historical_rows = database.fetchall(
+        """
+        SELECT c.id, other.user_number AS peer
+        FROM conversations c
+        JOIN conversation_members mine ON mine.conversation_id = c.id AND mine.user_number = ?
+        JOIN conversation_members other ON other.conversation_id = c.id AND other.user_number <> ?
+        WHERE c.type = 'direct'
+          AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+        """,
+        current_user,
+        current_user,
+    )
+    for row in historical_rows:
+        if row["peer"] not in direct_peers:
+            direct_peers[row["peer"]] = user_for_direct_conversation(database, current_user, row["peer"])
+
+    direct_items = []
+    for peer_number, friend in direct_peers.items():
+        conversation_id = ensure_direct_conversation(database, current_user, peer_number)
+        is_friend = are_friends(database, current_user, peer_number)
         direct_items.append(
             {
                 "id": conversation_id,
@@ -489,16 +588,18 @@ def list_conversations(database: Database, current_user: str):
                 "members": [friend],
                 "owner": None,
                 "my_alias": "",
-                "last_message": last_message_for_conversation(database, conversation_id, current_user, friend["number"]),
+                "status": "active" if is_friend else "inactive",
+                "my_status": "active" if is_friend else "left",
+                "last_message": last_message_for_conversation(database, conversation_id, current_user, peer_number),
             }
         )
 
     group_rows = database.fetchall(
         """
-        SELECT c.id, c.type, c.title, c.owner, c.updated_at, cm.alias
+        SELECT c.id, c.type, c.title, c.owner, c.status AS conversation_status, c.updated_at, cm.alias, cm.status AS member_status
         FROM conversations c
         JOIN conversation_members cm ON cm.conversation_id = c.id
-        WHERE c.type = 'group' AND cm.user_number = ? AND cm.status = 'active'
+        WHERE c.type = 'group' AND cm.user_number = ?
         ORDER BY c.updated_at DESC, c.created_at DESC
         """,
         current_user,
@@ -512,6 +613,8 @@ def list_conversations(database: Database, current_user: str):
             "members": conversation_members(database, row["id"]),
             "owner": row["owner"],
             "my_alias": row["alias"] or "",
+            "status": row["conversation_status"],
+            "my_status": row["member_status"],
             "last_message": last_message_for_conversation(database, row["id"], current_user),
         }
         for row in group_rows
@@ -554,14 +657,18 @@ def group_summary(database: Database, conversation_id: str, current_user: str):
         "members": conversation_members(database, conversation_id),
         "owner": row["owner"],
         "my_alias": row["alias"] or "",
+        "status": row["conversation_status"],
+        "my_status": row["status"],
         "last_message": last_message_for_conversation(database, conversation_id, current_user),
     }
 
 
 def create_group_invites(database: Database, inviter: str, conversation_id: str, invitees: list[str]):
-    row = require_conversation_member(database, conversation_id, inviter)
+    row = require_active_conversation_member(database, conversation_id, inviter)
     if row["type"] != "group":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Can only invite to groups")
+    if row["conversation_status"] != "active":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Group is dissolved")
     unique_invitees = []
     seen = set()
     for invitee in invitees:
@@ -570,7 +677,7 @@ def create_group_invites(database: Database, inviter: str, conversation_id: str,
             continue
         require_user(database, value)
         existing = member_row(database, conversation_id, value)
-        if existing:
+        if existing and existing["status"] == "active":
             continue
         seen.add(value)
         unique_invitees.append(value)
@@ -603,12 +710,23 @@ def create_group_invites(database: Database, inviter: str, conversation_id: str,
 
 def save_group_invite_card(database: Database, inviter: str, invitee: str, invite: dict):
     conversation_id = ensure_direct_conversation(database, inviter, invitee)
+    avatar_members = [
+        {
+            "number": member["number"],
+            "nickname": member["nickname"],
+            "display_name": member.get("group_alias") or member["nickname"] or member["number"],
+            "avatar_url": member.get("avatar_url"),
+            "avatar_color": member.get("avatar_color"),
+        }
+        for member in conversation_members(database, invite["conversation_id"])[:9]
+    ]
     body = json.dumps(
         {
             "invite_id": invite["id"],
             "conversation_id": invite["conversation_id"],
             "title": invite["conversation"]["title"],
             "inviter": inviter,
+            "avatar_members": avatar_members,
         },
         ensure_ascii=False,
     )
@@ -623,6 +741,38 @@ def save_group_invite_card(database: Database, inviter: str, invitee: str, invit
         body,
     )
     return fetch_message(database, cursor.lastrowid)
+
+
+def save_system_message(database: Database, conversation_id: str, actor: str, body: str):
+    cursor = database.execute(
+        """
+        INSERT INTO messages(conversation_id, sender, receiver, type, message)
+        VALUES (?, ?, ?, 'system', ?)
+        """,
+        conversation_id,
+        actor,
+        actor,
+        body.strip(),
+    )
+    database.execute("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversation_id)
+    return fetch_message(database, cursor.lastrowid)
+
+
+def member_display_name(database: Database, conversation_id: str, number: str):
+    row = database.fetchone(
+        """
+        SELECT u.number, u.nickname, cm.alias
+        FROM conversation_members cm
+        JOIN users u ON u.number = cm.user_number
+        WHERE cm.conversation_id = ? AND cm.user_number = ?
+        """,
+        conversation_id,
+        number,
+    )
+    if row is None:
+        user = require_user(database, number)
+        return user["nickname"] or number
+    return row["alias"] or row["nickname"] or number
 
 
 def group_invite_from_row(database: Database, row) -> dict:
@@ -674,6 +824,9 @@ def answer_group_invite(database: Database, current_user: str, invite_id: int, a
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Group invite not found")
     if row["status"] != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Group invite is no longer pending")
+    conversation = database.fetchone("SELECT status FROM conversations WHERE id = ?", row["conversation_id"])
+    if conversation is None or conversation["status"] != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Group is no longer active")
     next_status = "accepted" if accepted else "rejected"
     database.execute(
         """
@@ -699,11 +852,19 @@ def answer_group_invite(database: Database, current_user: str, invite_id: int, a
             INSERT INTO conversation_members(conversation_id, user_number, role, status)
             VALUES (?, ?, 'member', 'active')
             ON CONFLICT(conversation_id, user_number)
-            DO UPDATE SET status = 'active'
+            DO UPDATE SET status = 'active', left_at = NULL, left_message_id = NULL
             """,
             row["conversation_id"],
             current_user,
         )
+        system_message = save_system_message(
+            database,
+            row["conversation_id"],
+            current_user,
+            f"{member_display_name(database, row['conversation_id'], current_user)} joined the group",
+        )
+    else:
+        system_message = None
     updated = database.fetchone(
         """
         SELECT id, conversation_id, inviter, invitee, status, created_at, updated_at
@@ -712,22 +873,25 @@ def answer_group_invite(database: Database, current_user: str, invite_id: int, a
         """,
         invite_id,
     )
-    return {"invite": group_invite_from_row(database, updated)}
+    return {"invite": group_invite_from_row(database, updated), "message": system_message}
 
 
 def update_group(database: Database, current_user: str, conversation_id: str, title: str | None):
     require_group_owner(database, conversation_id, current_user)
+    message = None
     if title is not None:
+        clean_title = title.strip()[:80] or "Group Chat"
         database.execute(
             "UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            title.strip()[:80] or "Group Chat",
+            clean_title,
             conversation_id,
         )
-    return {"conversation": group_summary(database, conversation_id, current_user)}
+        message = save_system_message(database, conversation_id, current_user, f"Group name changed to {clean_title}")
+    return {"conversation": group_summary(database, conversation_id, current_user), "message": message}
 
 
 def update_group_alias(database: Database, current_user: str, conversation_id: str, alias: str):
-    require_conversation_member(database, conversation_id, current_user)
+    require_active_conversation_member(database, conversation_id, current_user)
     database.execute(
         """
         UPDATE conversation_members
@@ -745,16 +909,88 @@ def remove_group_member(database: Database, current_user: str, conversation_id: 
     row = require_group_owner(database, conversation_id, current_user)
     if member == row["owner"]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Owner cannot be removed")
+    removed_name = member_display_name(database, conversation_id, member)
+    message = save_system_message(database, conversation_id, current_user, f"{removed_name} was removed from the group")
     database.execute(
         """
         UPDATE conversation_members
-        SET status = 'left'
+        SET status = 'left', left_at = CURRENT_TIMESTAMP, left_message_id = ?
         WHERE conversation_id = ? AND user_number = ?
         """,
+        message["id"],
         conversation_id,
         member,
     )
-    return {"status": "removed", "conversation": group_summary(database, conversation_id, current_user)}
+    return {"status": "removed", "conversation": group_summary(database, conversation_id, current_user), "message": message}
+
+
+def leave_group(database: Database, current_user: str, conversation_id: str):
+    row = require_active_conversation_member(database, conversation_id, current_user)
+    if row["type"] != "group":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not a group conversation")
+    if row["owner"] == current_user:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Group owner must disband the group")
+    name = member_display_name(database, conversation_id, current_user)
+    message = save_system_message(database, conversation_id, current_user, f"{name} left the group")
+    database.execute(
+        """
+        UPDATE conversation_members
+        SET status = 'left', left_at = CURRENT_TIMESTAMP, left_message_id = ?
+        WHERE conversation_id = ? AND user_number = ?
+        """,
+        message["id"],
+        conversation_id,
+        current_user,
+    )
+    return {"status": "left", "conversation_id": conversation_id, "message": message}
+
+
+def dissolve_group(database: Database, current_user: str, conversation_id: str):
+    require_group_owner(database, conversation_id, current_user)
+    database.execute(
+        """
+        UPDATE conversations
+        SET status = 'dissolved', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        conversation_id,
+    )
+    database.execute(
+        """
+        UPDATE group_invites
+        SET status = 'rejected', updated_at = CURRENT_TIMESTAMP
+        WHERE conversation_id = ? AND status = 'pending'
+        """,
+        conversation_id,
+    )
+    message = save_system_message(database, conversation_id, current_user, "Group chat was disbanded")
+    return {"status": "dissolved", "conversation_id": conversation_id, "message": message}
+
+
+def transfer_group_owner(database: Database, current_user: str, conversation_id: str, new_owner: str):
+    row = require_group_owner(database, conversation_id, current_user)
+    target = member_row(database, conversation_id, new_owner)
+    if target is None or target["status"] != "active":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
+    if new_owner == row["owner"]:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Member is already the owner")
+    database.execute(
+        """
+        UPDATE conversation_members
+        SET role = CASE WHEN user_number = ? THEN 'owner' ELSE 'member' END
+        WHERE conversation_id = ?
+        """,
+        new_owner,
+        conversation_id,
+    )
+    database.execute(
+        "UPDATE conversations SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        new_owner,
+        conversation_id,
+    )
+    name = member_display_name(database, conversation_id, new_owner)
+    message = save_system_message(database, conversation_id, current_user, f"{name} became the new group owner")
+    return {"status": "transferred", "conversation": group_summary(database, conversation_id, current_user), "message": message}
 
 
 def update_friend_profile(database: Database, current_user: str, friend: str, alias: str | None, tags: list[str] | None):
@@ -796,6 +1032,27 @@ def require_message_permission(database: Database, sender: str, receiver: str):
     require_user(database, receiver)
     if not are_friends(database, sender, receiver):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only message friends")
+
+
+def require_direct_history_access(database: Database, current_user: str, peer: str):
+    require_user(database, peer)
+    conversation_id = direct_conversation_id(current_user, peer)
+    row = database.fetchone(
+        """
+        SELECT 1
+        FROM conversation_members mine
+        JOIN conversation_members other ON other.conversation_id = mine.conversation_id
+        WHERE mine.conversation_id = ?
+          AND mine.user_number = ?
+          AND other.user_number = ?
+        """,
+        conversation_id,
+        current_user,
+        peer,
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    return conversation_id
 
 
 def utc_timestamp(value) -> str:
@@ -954,7 +1211,7 @@ def save_conversation_attachment_message(
     mime_type: str,
     size: int,
 ):
-    row = require_conversation_member(database, conversation_id, sender)
+    row = require_active_conversation_member(database, conversation_id, sender)
     if row["type"] == "direct":
         members = [member["number"] for member in conversation_members(database, conversation_id)]
         receiver = next((member for member in members if member != sender), sender)
@@ -998,9 +1255,10 @@ def attachment_message_type(mime_type: str):
 
 
 def list_messages(database: Database, current_user: str, peer: str, limit: int):
-    if not are_friends(database, current_user, peer):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only read messages with friends")
-    conversation_id = ensure_direct_conversation(database, current_user, peer)
+    if are_friends(database, current_user, peer):
+        conversation_id = ensure_direct_conversation(database, current_user, peer)
+    else:
+        conversation_id = require_direct_history_access(database, current_user, peer)
     rows = database.fetchall(
         """
         SELECT
@@ -1040,8 +1298,14 @@ def list_conversation_messages(database: Database, current_user: str, conversati
         members = [member["number"] for member in conversation_members(database, conversation_id)]
         peer = next((member for member in members if member != current_user), current_user)
         return list_messages(database, current_user, peer, limit)
+    cutoff = visible_message_cutoff_for_member(row)
+    visibility_clause = f"AND m.{cutoff[0]} <= ?" if cutoff else ""
+    params = [conversation_id]
+    if cutoff:
+        params.append(cutoff[1])
+    params.append(min(max(limit, 1), 200))
     rows = database.fetchall(
-        """
+        f"""
         SELECT
             m.id,
             m.conversation_id,
@@ -1060,17 +1324,17 @@ def list_conversation_messages(database: Database, current_user: str, conversati
         FROM messages m
         LEFT JOIN attachments a ON a.message_id = m.id
         WHERE m.conversation_id = ?
+        {visibility_clause}
         ORDER BY m.id DESC
         LIMIT ?
         """,
-        conversation_id,
-        min(max(limit, 1), 200),
+        *params,
     )
     return [message_from_row(message) for message in reversed(rows)]
 
 
 def save_conversation_message(database: Database, sender: str, conversation_id: str, message_type: str, body: str):
-    row = require_conversation_member(database, conversation_id, sender)
+    row = require_active_conversation_member(database, conversation_id, sender)
     if row["type"] == "direct":
         members = [member["number"] for member in conversation_members(database, conversation_id)]
         receiver = next((member for member in members if member != sender), sender)
@@ -1088,3 +1352,414 @@ def save_conversation_message(database: Database, sender: str, conversation_id: 
     )
     database.execute("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversation_id)
     return fetch_message(database, cursor.lastrowid)
+
+
+def moment_visible_to_user(database: Database, current_user: str, author: str) -> bool:
+    return author == current_user or are_friends(database, current_user, author)
+
+
+def require_moment_access(database: Database, current_user: str, post_id: int):
+    row = database.fetchone(
+        """
+        SELECT
+            p.id,
+            p.author,
+            p.body,
+            p.created_at,
+            p.updated_at,
+            u.number,
+            u.nickname,
+            u.avatar,
+            u.avatar_file,
+            u.avatar_mime_type,
+            u.avatar_color,
+            u.background,
+            u.gender,
+            u.motto
+        FROM moment_posts p
+        JOIN users u ON u.number = p.author
+        WHERE p.id = ?
+        """,
+        post_id,
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Moment not found")
+    if not moment_visible_to_user(database, current_user, row["author"]):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot view this moment")
+    return row
+
+
+def moment_image_from_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["original_name"],
+        "url": f"/api/files/{row['stored_name']}",
+        "mime_type": row["mime_type"],
+        "size": row["size"],
+    }
+
+
+def moment_comment_from_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "post_id": row["post_id"],
+        "author": public_user(row),
+        "body": row["body"],
+        "created_at": utc_timestamp(row["created_at"]),
+    }
+
+
+def moment_from_row(database: Database, current_user: str, row) -> dict:
+    images = database.fetchall(
+        """
+        SELECT id, original_name, stored_name, mime_type, size
+        FROM moment_images
+        WHERE post_id = ?
+        ORDER BY position, id
+        """,
+        row["id"],
+    )
+    likes = database.fetchall(
+        """
+        SELECT u.number, u.nickname, u.avatar, u.avatar_file, u.avatar_mime_type, u.avatar_color, u.background, u.gender, u.motto
+        FROM moment_likes l
+        JOIN users u ON u.number = l.user_number
+        WHERE l.post_id = ?
+        ORDER BY l.created_at, l.user_number
+        """,
+        row["id"],
+    )
+    comments = database.fetchall(
+        """
+        SELECT
+            c.id,
+            c.post_id,
+            c.body,
+            c.created_at,
+            u.number,
+            u.nickname,
+            u.avatar,
+            u.avatar_file,
+            u.avatar_mime_type,
+            u.avatar_color,
+            u.background,
+            u.gender,
+            u.motto
+        FROM moment_comments c
+        JOIN users u ON u.number = c.author
+        WHERE c.post_id = ?
+        ORDER BY c.created_at, c.id
+        """,
+        row["id"],
+    )
+    author = public_user(row)
+    like_users = [public_user(like) for like in likes]
+    return {
+        "id": row["id"],
+        "author": author,
+        "body": row["body"],
+        "images": [moment_image_from_row(image) for image in images],
+        "likes": like_users,
+        "liked_by_me": any(user["number"] == current_user for user in like_users),
+        "comments": [moment_comment_from_row(comment) for comment in comments],
+        "created_at": utc_timestamp(row["created_at"]),
+        "updated_at": utc_timestamp(row["updated_at"]),
+    }
+
+
+def list_moments(database: Database, current_user: str, limit: int = 50):
+    rows = database.fetchall(
+        """
+        SELECT
+            p.id,
+            p.author,
+            p.body,
+            p.created_at,
+            p.updated_at,
+            u.number,
+            u.nickname,
+            u.avatar,
+            u.avatar_file,
+            u.avatar_mime_type,
+            u.avatar_color,
+            u.background,
+            u.gender,
+            u.motto
+        FROM moment_posts p
+        JOIN users u ON u.number = p.author
+        WHERE p.author = ?
+           OR EXISTS (
+                SELECT 1
+                FROM friendships f
+                WHERE f.owner = ? AND f.friend = p.author
+           )
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT ?
+        """,
+        current_user,
+        current_user,
+        min(max(limit, 1), 100),
+    )
+    return [moment_from_row(database, current_user, row) for row in rows]
+
+
+def list_user_moments(database: Database, current_user: str, author: str, limit: int = 50):
+    require_user(database, author)
+    if not moment_visible_to_user(database, current_user, author):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot view this user's moments")
+    rows = database.fetchall(
+        """
+        SELECT
+            p.id,
+            p.author,
+            p.body,
+            p.created_at,
+            p.updated_at,
+            u.number,
+            u.nickname,
+            u.avatar,
+            u.avatar_file,
+            u.avatar_mime_type,
+            u.avatar_color,
+            u.background,
+            u.gender,
+            u.motto
+        FROM moment_posts p
+        JOIN users u ON u.number = p.author
+        WHERE p.author = ?
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT ?
+        """,
+        author,
+        min(max(limit, 1), 100),
+    )
+    return [moment_from_row(database, current_user, row) for row in rows]
+
+
+def moment_profile_summary(database: Database, current_user: str, author: str):
+    user = public_user(require_user(database, author))
+    if not moment_visible_to_user(database, current_user, author):
+        return {"user": user, "images": []}
+    rows = database.fetchall(
+        """
+        SELECT i.id, i.original_name, i.stored_name, i.mime_type, i.size
+        FROM moment_images i
+        JOIN moment_posts p ON p.id = i.post_id
+        WHERE p.author = ?
+        ORDER BY p.created_at DESC, p.id DESC, i.position ASC, i.id ASC
+        LIMIT 4
+        """,
+        author,
+    )
+    return {"user": user, "images": [moment_image_from_row(row) for row in rows]}
+
+
+def create_moment_notification(database: Database, owner: str, actor: str, post_id: int, notification_type: str, comment_id: int | None = None):
+    if owner == actor:
+        return
+    database.execute(
+        """
+        INSERT INTO moment_notifications(owner, actor, post_id, type, comment_id)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        owner,
+        actor,
+        post_id,
+        notification_type,
+        comment_id,
+    )
+
+
+def list_moment_notifications(database: Database, current_user: str, limit: int = 80):
+    rows = database.fetchall(
+        """
+        SELECT
+            n.id,
+            n.post_id,
+            n.type,
+            n.is_read,
+            n.created_at,
+            c.body AS comment_body,
+            p.body AS post_body,
+            u.number,
+            u.nickname,
+            u.avatar,
+            u.avatar_file,
+            u.avatar_mime_type,
+            u.avatar_color,
+            u.background,
+            u.gender,
+            u.motto,
+            (
+                SELECT mi.stored_name
+                FROM moment_images mi
+                WHERE mi.post_id = n.post_id
+                ORDER BY mi.position, mi.id
+                LIMIT 1
+            ) AS image_stored_name,
+            (
+                SELECT mi.original_name
+                FROM moment_images mi
+                WHERE mi.post_id = n.post_id
+                ORDER BY mi.position, mi.id
+                LIMIT 1
+            ) AS image_original_name,
+            (
+                SELECT mi.mime_type
+                FROM moment_images mi
+                WHERE mi.post_id = n.post_id
+                ORDER BY mi.position, mi.id
+                LIMIT 1
+            ) AS image_mime_type,
+            (
+                SELECT mi.size
+                FROM moment_images mi
+                WHERE mi.post_id = n.post_id
+                ORDER BY mi.position, mi.id
+                LIMIT 1
+            ) AS image_size
+        FROM moment_notifications n
+        JOIN users u ON u.number = n.actor
+        JOIN moment_posts p ON p.id = n.post_id
+        LEFT JOIN moment_comments c ON c.id = n.comment_id
+        WHERE n.owner = ?
+        ORDER BY n.created_at DESC, n.id DESC
+        LIMIT ?
+        """,
+        current_user,
+        min(max(limit, 1), 150),
+    )
+    notifications = []
+    for row in rows:
+        image = None
+        if row["image_stored_name"]:
+            image = {
+                "name": row["image_original_name"],
+                "url": f"/api/files/{row['image_stored_name']}",
+                "mime_type": row["image_mime_type"],
+                "size": row["image_size"],
+            }
+        notifications.append(
+            {
+                "id": row["id"],
+                "post_id": row["post_id"],
+                "type": row["type"],
+                "is_read": bool(row["is_read"]),
+                "created_at": utc_timestamp(row["created_at"]),
+                "actor": public_user(row),
+                "comment_body": row["comment_body"] or "",
+                "post_body": row["post_body"] or "",
+                "post_image": image,
+            }
+        )
+    return notifications
+
+
+def moment_unread_count(database: Database, current_user: str) -> int:
+    row = database.fetchone(
+        "SELECT COUNT(*) AS count FROM moment_notifications WHERE owner = ? AND is_read = 0",
+        current_user,
+    )
+    return int(row["count"] if row else 0)
+
+
+def mark_moment_notifications_read(database: Database, current_user: str):
+    database.execute("UPDATE moment_notifications SET is_read = 1 WHERE owner = ?", current_user)
+    return {"status": "ok"}
+
+
+def create_moment(
+    database: Database,
+    current_user: str,
+    body: str,
+    images: list[tuple[str, str, str, int]],
+):
+    text = body.strip()
+    if not text and not images:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Moment needs text or images")
+    if len(images) > 9:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A moment can include at most 9 images")
+    cursor = database.execute(
+        """
+        INSERT INTO moment_posts(author, body)
+        VALUES (?, ?)
+        """,
+        current_user,
+        text[:4000],
+    )
+    post_id = cursor.lastrowid
+    for index, (original_name, stored_name, mime_type, size) in enumerate(images):
+        if not mime_type.startswith("image/"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Moments only support image attachments")
+        database.execute(
+            """
+            INSERT INTO moment_images(post_id, original_name, stored_name, mime_type, size, position)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            post_id,
+            original_name,
+            stored_name,
+            mime_type,
+            size,
+            index,
+        )
+    return moment_from_row(database, current_user, require_moment_access(database, current_user, post_id))
+
+
+def delete_moment(database: Database, current_user: str, post_id: int):
+    row = require_moment_access(database, current_user, post_id)
+    if row["author"] != current_user:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the author can delete this moment")
+    images = database.fetchall(
+        "SELECT stored_name FROM moment_images WHERE post_id = ?",
+        post_id,
+    )
+    database.execute("DELETE FROM moment_posts WHERE id = ?", post_id)
+    return {
+        "status": "deleted",
+        "post_id": post_id,
+        "files": [image["stored_name"] for image in images],
+    }
+
+
+def like_moment(database: Database, current_user: str, post_id: int):
+    row = require_moment_access(database, current_user, post_id)
+    cursor = database.execute(
+        """
+        INSERT OR IGNORE INTO moment_likes(post_id, user_number)
+        VALUES (?, ?)
+        """,
+        post_id,
+        current_user,
+    )
+    if cursor.rowcount:
+        create_moment_notification(database, row["author"], current_user, post_id, "like")
+    return moment_from_row(database, current_user, require_moment_access(database, current_user, post_id))
+
+
+def unlike_moment(database: Database, current_user: str, post_id: int):
+    require_moment_access(database, current_user, post_id)
+    database.execute(
+        "DELETE FROM moment_likes WHERE post_id = ? AND user_number = ?",
+        post_id,
+        current_user,
+    )
+    return moment_from_row(database, current_user, require_moment_access(database, current_user, post_id))
+
+
+def comment_on_moment(database: Database, current_user: str, post_id: int, body: str):
+    row = require_moment_access(database, current_user, post_id)
+    text = body.strip()
+    if not text:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Comment cannot be empty")
+    cursor = database.execute(
+        """
+        INSERT INTO moment_comments(post_id, author, body)
+        VALUES (?, ?, ?)
+        """,
+        post_id,
+        current_user,
+        text[:1000],
+    )
+    create_moment_notification(database, row["author"], current_user, post_id, "comment", cursor.lastrowid)
+    return moment_from_row(database, current_user, require_moment_access(database, current_user, post_id))

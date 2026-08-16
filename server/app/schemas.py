@@ -15,6 +15,7 @@ class LoginRequest(BaseModel):
 
 class AccountUpdate(BaseModel):
     nickname: str | None = Field(default=None, min_length=1, max_length=48)
+    motto: str | None = Field(default=None, max_length=120)
     current_password: str | None = Field(default=None, max_length=128)
     new_password: str | None = Field(default=None, min_length=6, max_length=128)
 
@@ -45,7 +46,15 @@ class GroupAliasUpdate(BaseModel):
     alias: str = Field(default="", max_length=48)
 
 
+class GroupOwnerUpdate(BaseModel):
+    owner: str
+
+
 class MessageCreate(BaseModel):
     receiver: str | None = None
     message_type: str = Field(default="text")
     body: str = Field(min_length=1, max_length=4000)
+
+
+class MomentCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=1000)

@@ -40,7 +40,7 @@ export function rejectGroupInvite(token: string, inviteId: number) {
 }
 
 export function updateGroup(token: string, conversationId: string, payload: { title?: string }) {
-  return request<{ conversation: Conversation }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+  return request<{ conversation: Conversation; message?: Message }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     token,
     method: "PATCH",
     body: payload
@@ -55,11 +55,36 @@ export function updateGroupAlias(token: string, conversationId: string, alias: s
   });
 }
 
+export function transferGroupOwner(token: string, conversationId: string, owner: string) {
+  return request<{ status: string; conversation: Conversation; message?: Message }>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/owner`,
+    {
+      token,
+      method: "PATCH",
+      body: { owner }
+    }
+  );
+}
+
 export function kickGroupMember(token: string, conversationId: string, member: string) {
-  return request<{ status: string; conversation: Conversation }>(
+  return request<{ status: string; conversation: Conversation; message?: Message }>(
     `/api/conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(member)}`,
     { token, method: "DELETE" }
   );
+}
+
+export function leaveGroup(token: string, conversationId: string) {
+  return request<{ status: string; conversation_id: string; message?: Message }>(`/api/conversations/${encodeURIComponent(conversationId)}/me`, {
+    token,
+    method: "DELETE"
+  });
+}
+
+export function dissolveGroup(token: string, conversationId: string) {
+  return request<{ status: string; conversation_id: string; message?: Message }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+    token,
+    method: "DELETE"
+  });
 }
 
 export function messages(token: string, peer: string) {
