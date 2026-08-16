@@ -105,3 +105,10 @@ export function uploadConversationAttachment(token: string, conversationId: stri
     body
   });
 }
+
+export function transcribeMessage(token: string, messageId: number) {
+  return request<{ text: string; model: string }>(`/api/messages/${messageId}/transcription`, {
+    token,
+    method: "POST"
+  });
+}

@@ -2,6 +2,7 @@ import re
 import uuid
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -23,6 +24,7 @@ from .schemas import (
 from .services import (
     accept_friend_request,
     answer_group_invite,
+    audio_attachment_for_transcription,
     conversation_members,
     create_group,
     create_group_invites,
@@ -311,6 +313,39 @@ def download_file(stored_name: str, download: bool = Query(default=False)):
     if download:
         return FileResponse(path, media_type=row["mime_type"], filename=row["original_name"])
     return FileResponse(path, media_type=row["mime_type"])
+
+
+@app.post("/api/messages/{message_id}/transcription")
+async def transcribe_audio_message(message_id: int, number: str = Depends(current_user)):
+    if not settings.openai_api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "OPENAI_API_KEY is not configured")
+    attachment = audio_attachment_for_transcription(db, number, message_id)
+    path = settings.upload_dir / attachment["stored_name"]
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio file not found")
+    try:
+        with path.open("rb") as audio:
+            files = {
+                "file": (
+                    attachment["original_name"],
+                    audio,
+                    attachment["mime_type"],
+                )
+            }
+            data = {"model": settings.openai_transcription_model}
+            headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post("https://api.openai.com/v1/audio/transcriptions", headers=headers, data=data, files=files)
+        if response.status_code >= 400:
+            error_payload = response.json().get("error", {}) if response.headers.get("content-type", "").startswith("application/json") else {}
+            detail = error_payload.get("message") or response.text or "Transcription failed"
+            raise HTTPException(response.status_code, detail)
+        result = response.json()
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Transcription failed: {error}") from error
+    return {"text": result.get("text", ""), "model": settings.openai_transcription_model}
 
 
 @app.get("/api/avatars/{stored_name}")

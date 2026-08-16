@@ -13,6 +13,7 @@ type UserCache = {
   theme: Theme;
   conversations: Record<string, CachedConversation>;
   unreadCounts: Record<string, number>;
+  pinnedChatKeys: string[];
 };
 
 const MAX_CACHED_MESSAGES = 200;
@@ -26,7 +27,8 @@ function emptyCache(): UserCache {
     version: 1,
     theme: "classic",
     conversations: {},
-    unreadCounts: {}
+    unreadCounts: {},
+    pinnedChatKeys: []
   };
 }
 
@@ -39,7 +41,8 @@ function normalizeCache(value: unknown): UserCache {
     version: 1,
     theme: candidate.theme === "dark" ? "dark" : "classic",
     conversations: candidate.conversations && typeof candidate.conversations === "object" ? candidate.conversations : {},
-    unreadCounts: candidate.unreadCounts && typeof candidate.unreadCounts === "object" ? candidate.unreadCounts : {}
+    unreadCounts: candidate.unreadCounts && typeof candidate.unreadCounts === "object" ? candidate.unreadCounts : {},
+    pinnedChatKeys: Array.isArray(candidate.pinnedChatKeys) ? candidate.pinnedChatKeys.filter((key) => typeof key === "string") : []
   };
 }
 
@@ -79,6 +82,14 @@ export function readUnreadCounts(number: string) {
 
 export function writeUnreadCounts(number: string, unreadCounts: Record<string, number>) {
   updateUserCache(number, (cache) => ({ ...cache, unreadCounts }));
+}
+
+export function readPinnedChatKeys(number: string) {
+  return readUserCache(number).pinnedChatKeys;
+}
+
+export function writePinnedChatKeys(number: string, pinnedChatKeys: string[]) {
+  updateUserCache(number, (cache) => ({ ...cache, pinnedChatKeys: [...new Set(pinnedChatKeys)] }));
 }
 
 export function readMutedPeers(number: string) {

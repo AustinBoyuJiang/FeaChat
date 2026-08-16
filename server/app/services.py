@@ -419,11 +419,26 @@ def last_message_for_conversation(database: Database, conversation_id: str, curr
     if peer:
         row = database.fetchone(
             """
-            SELECT id, conversation_id, sender, receiver, time, type, message
-            FROM messages
-            WHERE conversation_id = ?
-               OR ((sender = ? AND receiver = ?) OR (sender = ? AND receiver = ?))
-            ORDER BY id DESC
+            SELECT
+                m.id,
+                m.conversation_id,
+                m.sender,
+                m.receiver,
+                m.time,
+                m.type,
+                m.message,
+                a.original_name AS file_name,
+                CASE
+                    WHEN a.stored_name IS NULL THEN NULL
+                    ELSE '/api/files/' || a.stored_name
+                END AS file_url,
+                a.mime_type,
+                a.size AS file_size
+            FROM messages m
+            LEFT JOIN attachments a ON a.message_id = m.id
+            WHERE m.conversation_id = ?
+               OR ((m.sender = ? AND m.receiver = ?) OR (m.sender = ? AND m.receiver = ?))
+            ORDER BY m.id DESC
             LIMIT 1
             """,
             conversation_id,
@@ -435,10 +450,25 @@ def last_message_for_conversation(database: Database, conversation_id: str, curr
     else:
         row = database.fetchone(
             """
-            SELECT id, conversation_id, sender, receiver, time, type, message
-            FROM messages
-            WHERE conversation_id = ?
-            ORDER BY id DESC
+            SELECT
+                m.id,
+                m.conversation_id,
+                m.sender,
+                m.receiver,
+                m.time,
+                m.type,
+                m.message,
+                a.original_name AS file_name,
+                CASE
+                    WHEN a.stored_name IS NULL THEN NULL
+                    ELSE '/api/files/' || a.stored_name
+                END AS file_url,
+                a.mime_type,
+                a.size AS file_size
+            FROM messages m
+            LEFT JOIN attachments a ON a.message_id = m.id
+            WHERE m.conversation_id = ?
+            ORDER BY m.id DESC
             LIMIT 1
             """,
             conversation_id,
@@ -824,6 +854,43 @@ def fetch_message(database: Database, message_id: int):
     return message_from_row(row)
 
 
+def audio_attachment_for_transcription(database: Database, current_user: str, message_id: int):
+    row = database.fetchone(
+        """
+        SELECT
+            m.id,
+            m.conversation_id,
+            m.sender,
+            m.receiver,
+            m.type,
+            a.original_name,
+            a.stored_name,
+            a.mime_type,
+            a.size
+        FROM messages m
+        JOIN attachments a ON a.message_id = m.id
+        WHERE m.id = ?
+        """,
+        message_id,
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio message not found")
+    mime_type = row["mime_type"] or ""
+    if row["type"] != "audio" and not mime_type.startswith("audio/"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Message is not an audio attachment")
+    if row["conversation_id"]:
+        require_conversation_member(database, row["conversation_id"], current_user)
+    elif current_user not in {row["sender"], row["receiver"]}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot transcribe this message")
+    return {
+        "message_id": row["id"],
+        "original_name": row["original_name"],
+        "stored_name": row["stored_name"],
+        "mime_type": mime_type or "application/octet-stream",
+        "size": row["size"],
+    }
+
+
 def save_message(database: Database, sender: str, receiver: str, message_type: str, body: str):
     require_message_permission(database, sender, receiver)
     conversation_id = ensure_direct_conversation(database, sender, receiver)
@@ -852,7 +919,7 @@ def save_attachment_message(
 ):
     require_message_permission(database, sender, receiver)
     conversation_id = ensure_direct_conversation(database, sender, receiver)
-    message_type = "image" if mime_type.startswith("image/") else "file"
+    message_type = attachment_message_type(mime_type)
     cursor = database.execute(
         """
         INSERT INTO messages(conversation_id, sender, receiver, type, message)
@@ -893,7 +960,7 @@ def save_conversation_attachment_message(
         receiver = next((member for member in members if member != sender), sender)
         return save_attachment_message(database, sender, receiver, original_name, stored_name, mime_type, size)
 
-    message_type = "image" if mime_type.startswith("image/") else "file"
+    message_type = attachment_message_type(mime_type)
     cursor = database.execute(
         """
         INSERT INTO messages(conversation_id, sender, receiver, type, message)
@@ -918,6 +985,16 @@ def save_conversation_attachment_message(
     )
     database.execute("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversation_id)
     return fetch_message(database, cursor.lastrowid)
+
+
+def attachment_message_type(mime_type: str):
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "file"
 
 
 def list_messages(database: Database, current_user: str, peer: str, limit: int):

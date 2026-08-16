@@ -1,13 +1,15 @@
-import { ChangeEvent, FormEvent, Fragment, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, Fragment, MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Aperture,
   Check,
   CircleUserRound,
+  Copy,
   Download,
   FileText,
   Image as ImageIcon,
   Menu,
   LogOut,
+  Mic,
   MessageCircle,
   MessageSquare,
   Minus,
@@ -16,10 +18,15 @@ import {
   Pencil,
   Phone,
   PhoneOff,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Send,
   Settings,
+  Smile,
+  Square,
+  Trash2,
   UserPlus,
   Video,
   X
@@ -31,10 +38,12 @@ import {
   mergeCachedMessages,
   readMutedPeers,
   readCachedMessages,
+  readPinnedChatKeys,
   readUnreadCounts,
   readTheme,
   writeCachedMessages,
   writeMutedPeers,
+  writePinnedChatKeys,
   writeUnreadCounts,
   writeTheme,
   type Theme
@@ -44,14 +53,17 @@ import {
   formatBytes,
   formatCallMessage,
   formatMessageTimestamp,
+  isAudioMessage,
   isImageMessage,
+  isVideoMessage,
   messagePreview,
   parseCallMessage,
   parseMessageTime,
   parseGroupInviteMessage,
   sortMessages,
   shouldShowTimestamp,
-  uniqueMessages
+  uniqueMessages,
+  voiceDurationLabel
 } from "./lib/messages";
 import { setDockUnreadBadge } from "./lib/dockBadge";
 import { playIncomingMessageSound, startIncomingCallRingtone, stopIncomingCallRingtone } from "./lib/sounds";
@@ -75,6 +87,24 @@ type ContactPickerMode = "createGroup" | "inviteGroup" | "kickGroup";
 type InlineEditTarget = "profileAlias" | "profileTags" | "groupAlias" | "groupName";
 type SettingsSection = "account" | "appearance";
 type ChatListItem = { kind: "group"; conversation: Conversation } | { kind: "direct"; friend: User };
+type ChatContextMenuState = {
+  key: string;
+  title: string;
+  x: number;
+  y: number;
+} | null;
+type MessageContextMenuState = {
+  message: Message;
+  x: number;
+  y: number;
+} | null;
+type ConfirmDialogState = {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+} | null;
 type CallMode = "voice" | "video";
 type CallSignal =
   | { kind: "offer"; mode: CallMode; description: RTCSessionDescriptionInit }
@@ -86,6 +116,7 @@ type CallState =
   | { status: "idle" }
   | { status: "incoming"; mode: CallMode; peerNumber: string; peerName: string; conversationId?: string }
   | { status: "outgoing" | "connecting" | "active"; mode: CallMode; peerNumber: string; peerName: string; conversationId?: string };
+type RecordingState = "idle" | "recording" | "stopping";
 
 type ProfileCardState = {
   user: User;
@@ -107,6 +138,9 @@ const noTextAssist = {
 } as const;
 const LEGACY_CACHE_BRIDGE_URL = "http://127.0.0.1:1420/legacy-cache-bridge.html";
 const LEGACY_CACHE_ORIGIN = "http://127.0.0.1:1420";
+const MAX_VOICE_RECORDING_SECONDS = 60;
+const EMOJI_ITEMS = ["😀", "😂", "😊", "😍", "🥰", "😎", "😭", "😅", "🙃", "😴", "👍", "🙏", "👏", "💪", "🔥", "✨", "🎉", "❤️", "💙", "✅", "☕", "🍰", "🌙", "⭐"];
+const KAOMOJI_ITEMS = ["(＾▽＾)", "(｡•̀ᴗ-)✧", "(╯°□°）╯", "¯\\_(ツ)_/¯", "(；′⌒`)", "(づ￣ ³￣)づ", "(｀・ω・´)", "(。-`ω´-)", "(╥﹏╥)", "ヽ(•‿•)ノ"];
 
 function migrateLegacyLocalCache(onMigrated: () => void) {
   if (window.location.hostname !== "localhost") {
@@ -245,6 +279,10 @@ export default function App() {
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [mutedPeers, setMutedPeers] = useState<Set<string>>(() => (me ? readMutedPeers(me.number) : new Set()));
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>(() => (me ? readUnreadCounts(me.number) : {}));
+  const [pinnedChatKeys, setPinnedChatKeys] = useState<string[]>(() => (me ? readPinnedChatKeys(me.number) : []));
+  const [chatContextMenu, setChatContextMenu] = useState<ChatContextMenuState>(null);
+  const [messageContextMenu, setMessageContextMenu] = useState<MessageContextMenuState>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [accountNameDraft, setAccountNameDraft] = useState("");
@@ -258,6 +296,13 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [playingAudioId, setPlayingAudioId] = useState<number | null>(null);
+  const [transcribingMessageId, setTranscribingMessageId] = useState<number | null>(null);
+  const [transcriptions, setTranscriptions] = useState<Record<number, string>>({});
+  const [transcriptionErrors, setTranscriptionErrors] = useState<Record<number, string>>({});
   const [previewMessages, setPreviewMessages] = useState<Record<string, Message>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -273,11 +318,18 @@ export default function App() {
   const pendingIceCandidatesRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const appMenuRef = useRef<HTMLDivElement | null>(null);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   const callMenuRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceStartedAtRef = useRef<number | null>(null);
+  const voiceTimerRef = useRef<number | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voicePlaybackUrlsRef = useRef<Record<number, string>>({});
 
   const selectedNumber = selected?.number;
   const selectedGroupId = selectedGroup?.id;
@@ -334,6 +386,313 @@ export default function App() {
     });
   }
 
+  function persistPinnedChatKeys(nextKeys: string[]) {
+    if (me?.number) {
+      writePinnedChatKeys(me.number, nextKeys);
+    }
+  }
+
+  function togglePinnedChat(key: string) {
+    setPinnedChatKeys((current) => {
+      const next = current.includes(key) ? current.filter((item) => item !== key) : [key, ...current];
+      persistPinnedChatKeys(next);
+      return next;
+    });
+    setChatContextMenu(null);
+  }
+
+  function unpinChat(key: string) {
+    setPinnedChatKeys((current) => {
+      if (!current.includes(key)) {
+        return current;
+      }
+      const next = current.filter((item) => item !== key);
+      persistPinnedChatKeys(next);
+      return next;
+    });
+  }
+
+  function clearLocalConversation(key: string) {
+    if (!me) {
+      return;
+    }
+    clearCachedMessages(me.number, key);
+    setPreviewMessage(key, null);
+    clearUnreadCount(key);
+    unpinChat(key);
+    if (selected?.number === key || selectedGroup?.id === key) {
+      setSelected(null);
+      setSelectedGroup(null);
+      replaceMessages([], "auto");
+    }
+    setConversationMenuOpen(false);
+    setChatContextMenu(null);
+    setChatSearchQuery("");
+    setChatSearchOpen(false);
+  }
+
+  function askToDeleteChat(key: string, title: string) {
+    setChatContextMenu(null);
+    setConfirmDialog({
+      title: "Delete Chat",
+      body: `Delete local chat history with ${title}? This only clears this device's cache.`,
+      confirmLabel: "Delete",
+      destructive: true,
+      onConfirm: () => clearLocalConversation(key)
+    });
+  }
+
+  function openChatContextMenu(event: MouseEvent<HTMLElement>, key: string, title: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setConversationMenuOpen(false);
+    setCallMenuOpen(false);
+    setAddMenuOpen(false);
+    setMessageContextMenu(null);
+    setChatContextMenu({
+      key,
+      title,
+      x: Math.min(event.clientX, window.innerWidth - 178),
+      y: Math.min(event.clientY, window.innerHeight - 96)
+    });
+  }
+
+  function openMessageContextMenu(event: MouseEvent<HTMLElement>, message: Message) {
+    event.preventDefault();
+    event.stopPropagation();
+    setConversationMenuOpen(false);
+    setCallMenuOpen(false);
+    setChatContextMenu(null);
+    setMessageContextMenu({
+      message,
+      x: Math.min(event.clientX, window.innerWidth - 184),
+      y: Math.min(event.clientY, window.innerHeight - 132)
+    });
+  }
+
+  async function copyMessageText(message: Message) {
+    setMessageContextMenu(null);
+    if (!message.message) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(message.message);
+      setUploadStatus("Copied");
+      setUploadError("");
+    } catch {
+      setUploadError("Copy failed");
+    }
+  }
+
+  async function transcribeAudioMessage(message: Message) {
+    if (!token || !isAudioMessage(message)) {
+      return;
+    }
+    setMessageContextMenu(null);
+    setTranscribingMessageId(message.id);
+    setTranscriptionErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+    try {
+      const response = await api.transcribeMessage(token, message.id);
+      setTranscriptions((current) => ({ ...current, [message.id]: response.text || "No speech detected" }));
+    } catch (error) {
+      setTranscriptionErrors((current) => ({
+        ...current,
+        [message.id]: error instanceof Error ? error.message : "Transcription failed"
+      }));
+    } finally {
+      setTranscribingMessageId(null);
+    }
+  }
+
+  function askToClearSelectedConversation() {
+    if ((!selected && !selectedGroup) || !me) {
+      return;
+    }
+    const key = selectedGroup?.id ?? selected!.number;
+    const title = selectedGroup ? groupTitle(selectedGroup) : displayName(selected!);
+    setConversationMenuOpen(false);
+    setConfirmDialog({
+      title: "Clear Chat History",
+      body: `Clear local chat history with ${title}? This only clears this device's cache.`,
+      confirmLabel: "Clear",
+      destructive: true,
+      onConfirm: () => clearLocalConversation(key)
+    });
+  }
+
+  function confirmDialogAction() {
+    const action = confirmDialog?.onConfirm;
+    setConfirmDialog(null);
+    action?.();
+  }
+
+  function insertEmojiText(value: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? draft.length;
+    const end = textarea?.selectionEnd ?? draft.length;
+    const nextDraft = `${draft.slice(0, start)}${value}${draft.slice(end)}`;
+    setDraft(nextDraft);
+    window.setTimeout(() => {
+      textarea?.focus();
+      const nextCursor = start + value.length;
+      textarea?.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
+  }
+
+  function supportedAudioMimeType() {
+    const candidates = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/aac", "audio/webm;codecs=opus", "audio/webm"];
+    if (!window.MediaRecorder) {
+      return "";
+    }
+    const audio = document.createElement("audio");
+    const playableAndRecordable = candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType) && audio.canPlayType(mimeType));
+    return playableAndRecordable ?? candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? "";
+  }
+
+  function voiceFileExtension(mimeType: string) {
+    if (mimeType.includes("mp4") || mimeType.includes("aac")) {
+      return "m4a";
+    }
+    if (mimeType.includes("ogg")) {
+      return "ogg";
+    }
+    return "webm";
+  }
+
+  function stopVoiceTimer() {
+    if (voiceTimerRef.current !== null) {
+      window.clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+  }
+
+  function stopVoiceStream() {
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceStreamRef.current = null;
+  }
+
+  function stopVoiceRecording() {
+    if (recordingState !== "recording") {
+      return;
+    }
+    setRecordingState("stopping");
+    stopVoiceTimer();
+    mediaRecorderRef.current?.stop();
+  }
+
+  async function startVoiceRecording() {
+    if (!token || (!selected && !selectedGroup)) {
+      setUploadError("Select a chat before recording voice");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setUploadError("Voice recording is unavailable in this window. Restart FeaChat from the updated Tauri app and allow microphone permission.");
+      return;
+    }
+    setUploadError("");
+    setUploadStatus("");
+    setEmojiPickerOpen(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = supportedAudioMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      voiceChunksRef.current = [];
+      voiceStartedAtRef.current = Date.now();
+      voiceStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          voiceChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stopVoiceTimer();
+        stopVoiceStream();
+        const elapsedSeconds = Math.max(1, Math.min(MAX_VOICE_RECORDING_SECONDS, Math.round(((Date.now() - (voiceStartedAtRef.current ?? Date.now())) / 1000))));
+        const blobType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(voiceChunksRef.current, { type: blobType });
+        if (blob.size > 0) {
+          const file = new File([blob], `Voice message ${elapsedSeconds}s.${voiceFileExtension(blobType)}`, { type: blobType });
+          setPendingFiles((current) => [...current, file]);
+        }
+        voiceChunksRef.current = [];
+        voiceStartedAtRef.current = null;
+        mediaRecorderRef.current = null;
+        setRecordingSeconds(0);
+        setRecordingState("idle");
+      };
+      recorder.start();
+      setRecordingSeconds(0);
+      setRecordingState("recording");
+      voiceTimerRef.current = window.setInterval(() => {
+        const elapsedSeconds = Math.floor((Date.now() - (voiceStartedAtRef.current ?? Date.now())) / 1000);
+        setRecordingSeconds(Math.min(MAX_VOICE_RECORDING_SECONDS, elapsedSeconds));
+        if (elapsedSeconds >= MAX_VOICE_RECORDING_SECONDS) {
+          stopVoiceTimer();
+          mediaRecorderRef.current?.stop();
+          setRecordingState("stopping");
+        }
+      }, 250);
+    } catch (error) {
+      stopVoiceTimer();
+      stopVoiceStream();
+      mediaRecorderRef.current = null;
+      setRecordingState("idle");
+      setRecordingSeconds(0);
+      setUploadError(error instanceof Error ? error.message : "Could not start voice recording");
+    }
+  }
+
+  function toggleVoiceRecording() {
+    if (recordingState === "recording") {
+      stopVoiceRecording();
+    } else if (recordingState === "idle") {
+      startVoiceRecording();
+    }
+  }
+
+  async function playVoiceMessage(message: Message, audio: HTMLAudioElement) {
+    if (!message.attachment) {
+      return;
+    }
+    if (!audio.paused) {
+      audio.pause();
+      return;
+    }
+    document.querySelectorAll<HTMLAudioElement>(".voice-message audio").forEach((item) => {
+      if (item !== audio) {
+        item.pause();
+      }
+    });
+    try {
+      await audio.play();
+      return;
+    } catch {
+      // Some macOS WebViews refuse direct HTTP media playback. A blob URL fallback keeps old voice messages usable.
+    }
+    try {
+      let objectUrl = voicePlaybackUrlsRef.current[message.id];
+      if (!objectUrl) {
+        const response = await fetch(api.fileUrl(message.attachment.url));
+        if (!response.ok) {
+          throw new Error("Voice playback failed");
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        voicePlaybackUrlsRef.current[message.id] = objectUrl;
+      }
+      audio.src = objectUrl;
+      audio.load();
+      await audio.play();
+    } catch {
+      setPlayingAudioId(null);
+    }
+  }
+
   function syncConversationPreviews(nextConversations: Conversation[], userNumber: string) {
     const previewEntries = new Map<string, Message | null>();
     for (const conversation of nextConversations) {
@@ -369,8 +728,11 @@ export default function App() {
     setAddSearchResults([]);
     setInlineEdit(null);
     setConversationMenuOpen(false);
+    setChatContextMenu(null);
+    setMessageContextMenu(null);
     setChatSearchOpen(false);
     setChatSearchQuery("");
+    setEmojiPickerOpen(false);
   }
 
   async function loadContacts(activeToken = token, activeUserNumber = me?.number) {
@@ -512,6 +874,9 @@ export default function App() {
     setUploadStatus("");
     setUploadError("");
     setConversationMenuOpen(false);
+    setChatContextMenu(null);
+    setConfirmDialog(null);
+    setPinnedChatKeys([]);
     setChatSearchOpen(false);
     setChatSearchQuery("");
   }
@@ -792,16 +1157,7 @@ export default function App() {
   }
 
   function clearConversation() {
-    if ((!selected && !selectedGroup) || !me) {
-      return;
-    }
-    const key = selectedGroup?.id ?? selected!.number;
-    clearCachedMessages(me.number, key);
-    setPreviewMessage(key, null);
-    replaceMessages([], "auto");
-    setConversationMenuOpen(false);
-    setChatSearchQuery("");
-    setChatSearchOpen(false);
+    askToClearSelectedConversation();
   }
 
   function toggleMuteSelected() {
@@ -1108,7 +1464,7 @@ export default function App() {
 
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
-    if (!token || (!selected && !selectedGroup) || uploading || (!draft.trim() && pendingFiles.length === 0)) {
+    if (!token || (!selected && !selectedGroup) || uploading || recordingState !== "idle" || (!draft.trim() && pendingFiles.length === 0)) {
       return;
     }
     const text = draft.trim();
@@ -1238,18 +1594,29 @@ export default function App() {
   useEffect(() => {
     if (!me) {
       setUnreadCounts({});
+      setPinnedChatKeys([]);
       setDockUnreadBadge(0);
       return;
     }
     setTheme(readTheme(me.number));
     setMutedPeers(readMutedPeers(me.number));
     setUnreadCounts(readUnreadCounts(me.number));
+    setPinnedChatKeys(readPinnedChatKeys(me.number));
     return migrateLegacyLocalCache(() => {
       setTheme(readTheme(me.number));
       setMutedPeers(readMutedPeers(me.number));
       setUnreadCounts(readUnreadCounts(me.number));
+      setPinnedChatKeys(readPinnedChatKeys(me.number));
     });
   }, [me?.number]);
+
+  useEffect(() => {
+    const preventNativeContextMenu = (event: Event) => {
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", preventNativeContextMenu);
+    return () => document.removeEventListener("contextmenu", preventNativeContextMenu);
+  }, []);
 
   useEffect(() => {
     const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
@@ -1296,12 +1663,43 @@ export default function App() {
   }, [callMenuOpen]);
 
   useEffect(() => {
+    if (!chatContextMenu) {
+      return;
+    }
+    const closeMenu = () => setChatContextMenu(null);
+    document.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("resize", closeMenu);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("resize", closeMenu);
+    };
+  }, [chatContextMenu]);
+
+  useEffect(() => {
+    if (!messageContextMenu) {
+      return;
+    }
+    const closeMenu = () => setMessageContextMenu(null);
+    document.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("resize", closeMenu);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("resize", closeMenu);
+    };
+  }, [messageContextMenu]);
+
+  useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
 
   useEffect(() => {
     return () => {
       stopIncomingCallRingtone();
+      stopVoiceTimer();
+      mediaRecorderRef.current?.stop();
+      stopVoiceStream();
+      Object.values(voicePlaybackUrlsRef.current).forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
+      voicePlaybackUrlsRef.current = {};
       setDockUnreadBadge(0);
     };
   }, []);
@@ -1404,26 +1802,46 @@ export default function App() {
     }
     return groups.filter((conversation) => groupTitle(conversation).toLowerCase().includes(needle));
   }, [conversations, query]);
+  const pinnedChatKeySet = useMemo(() => new Set(pinnedChatKeys), [pinnedChatKeys]);
+  function chatItemKey(item: ChatListItem) {
+    return item.kind === "group" ? item.conversation.id : item.friend.number;
+  }
+  function chatItemTitle(item: ChatListItem) {
+    return item.kind === "group" ? conversationTitle(item.conversation) : displayName(item.friend);
+  }
+  function compareChatItems(a: ChatListItem, b: ChatListItem) {
+    const aKey = chatItemKey(a);
+    const bKey = chatItemKey(b);
+    const aMessage = previewMessages[aKey];
+    const bMessage = previewMessages[bKey];
+    const aTime = aMessage ? parseMessageTime(aMessage.time).getTime() : 0;
+    const bTime = bMessage ? parseMessageTime(bMessage.time).getTime() : 0;
+    if (aTime !== bTime) {
+      return bTime - aTime;
+    }
+    return chatItemTitle(a).localeCompare(chatItemTitle(b));
+  }
   const chatListItems = useMemo(() => {
+    const searching = query.trim().length > 0;
     const items: ChatListItem[] = [
       ...groupConversations.map((conversation) => ({ kind: "group" as const, conversation })),
       ...filteredFriends.map((friend) => ({ kind: "direct" as const, friend }))
-    ];
-    return items.sort((a, b) => {
-      const aKey = a.kind === "group" ? a.conversation.id : a.friend.number;
-      const bKey = b.kind === "group" ? b.conversation.id : b.friend.number;
-      const aMessage = previewMessages[aKey];
-      const bMessage = previewMessages[bKey];
-      const aTime = aMessage ? parseMessageTime(aMessage.time).getTime() : 0;
-      const bTime = bMessage ? parseMessageTime(bMessage.time).getTime() : 0;
-      if (aTime !== bTime) {
-        return bTime - aTime;
-      }
-      const aTitle = a.kind === "group" ? conversationTitle(a.conversation) : displayName(a.friend);
-      const bTitle = b.kind === "group" ? conversationTitle(b.conversation) : displayName(b.friend);
-      return aTitle.localeCompare(bTitle);
+    ].filter((item) => {
+      return searching || Boolean(previewMessages[chatItemKey(item)]);
     });
-  }, [filteredFriends, groupConversations, previewMessages]);
+    return items.sort((a, b) => {
+      const aPinned = pinnedChatKeySet.has(chatItemKey(a));
+      const bPinned = pinnedChatKeySet.has(chatItemKey(b));
+      if (aPinned !== bPinned) {
+        return aPinned ? -1 : 1;
+      }
+      return compareChatItems(a, b);
+    });
+  }, [filteredFriends, groupConversations, pinnedChatKeySet, previewMessages, query]);
+  const pinnedChatListCount = useMemo(
+    () => chatListItems.filter((item) => pinnedChatKeySet.has(chatItemKey(item))).length,
+    [chatListItems, pinnedChatKeySet]
+  );
   const contentTitle = selectedGroup
     ? groupTitle(selectedGroup)
     : selected
@@ -1441,20 +1859,49 @@ export default function App() {
     }
     return orderedMessages.filter((message) => messagePreview(message).toLowerCase().includes(query));
   }, [orderedMessages, chatSearchQuery]);
+  const knownUsersByNumber = useMemo(() => {
+    const users = new Map<string, User>();
+    if (me) {
+      users.set(me.number, me);
+    }
+    for (const friend of friends) {
+      users.set(friend.number, friend);
+    }
+    for (const conversation of conversations) {
+      for (const member of conversation.members) {
+        users.set(member.number, member);
+      }
+      if (conversation.peer) {
+        users.set(conversation.peer.number, conversation.peer);
+      }
+    }
+    return users;
+  }, [conversations, friends, me]);
+  const chatListPreviewText = useCallback(
+    (message: Message) => {
+      const text = messagePreview(message);
+      if (!me || message.sender === me.number) {
+        return text;
+      }
+      const sender = knownUsersByNumber.get(message.sender);
+      return `${sender ? displayName(sender) : message.sender}: ${text}`;
+    },
+    [knownUsersByNumber, me]
+  );
   const conversationPreviews = useMemo(() => {
     return Object.fromEntries(
       [
         ...friends.map((friend) => {
-        const last = previewMessages[friend.number] ?? null;
-        return [
-          friend.number,
-          last
-            ? {
-                text: messagePreview(last),
-                time: formatMessageTimestamp(last.time)
-              }
-            : { text: "No messages yet" }
-        ];
+          const last = previewMessages[friend.number] ?? null;
+          return [
+            friend.number,
+            last
+              ? {
+                  text: chatListPreviewText(last),
+                  time: formatMessageTimestamp(last.time)
+                }
+              : { text: "No messages yet" }
+          ];
         }),
         ...groupConversations.map((conversation) => {
           const last = previewMessages[conversation.id] ?? null;
@@ -1462,7 +1909,7 @@ export default function App() {
             conversation.id,
             last
               ? {
-                  text: messagePreview(last),
+                  text: chatListPreviewText(last),
                   time: formatMessageTimestamp(last.time)
                 }
               : { text: "No messages yet" }
@@ -1470,7 +1917,7 @@ export default function App() {
         })
       ]
     );
-  }, [friends, groupConversations, previewMessages]);
+  }, [chatListPreviewText, friends, groupConversations, previewMessages]);
   const contactGroups = useMemo(() => {
     const groups = new Map<string, User[]>();
     for (const friend of filteredFriends) {
@@ -1531,10 +1978,16 @@ export default function App() {
     () => new Set(conversations.filter((conversation) => conversation.type === "group").map((conversation) => conversation.id)),
     [conversations]
   );
+  const contactGroupConversations = useMemo(
+    () => [...conversations.filter((conversation) => conversation.type === "group")].sort((a, b) => groupTitle(a).localeCompare(groupTitle(b))),
+    [conversations]
+  );
+  const totalUnread = Object.values(unreadCounts).reduce((sum, count) => sum + count, 0);
+  const pendingFriendRequestCount = requests.length;
 
   if (!token || !me) {
     return (
-      <main className="auth-shell">
+      <main className="auth-shell" onContextMenu={(event) => event.preventDefault()}>
         <WindowControls />
         <section className="auth-panel">
           <div className="brand-row">
@@ -1588,7 +2041,7 @@ export default function App() {
   }
 
   return (
-    <main className={`app-shell theme-${theme}`}>
+    <main className={`app-shell theme-${theme}`} onContextMenu={(event) => event.preventDefault()}>
       <WindowControls />
       <aside className="rail" onMouseDown={startWindowDrag} onDoubleClick={toggleMaximizeFromDragArea}>
         <button className="self-avatar" title="Profile" onClick={(event) => openProfileCard(event, me, false)}>
@@ -1603,6 +2056,7 @@ export default function App() {
           }}
         >
           <MessageCircle size={21} />
+          {totalUnread > 0 && <span className="rail-badge">{totalUnread}</span>}
         </button>
         <button
           title="Contacts"
@@ -1616,6 +2070,7 @@ export default function App() {
           }}
         >
           <CircleUserRound size={21} />
+          {pendingFriendRequestCount > 0 && <span className="rail-badge">{pendingFriendRequestCount}</span>}
         </button>
         <button
           title="Moments"
@@ -1859,6 +2314,27 @@ export default function App() {
                       </span>
                       {requests.length > 0 && <span className="request-count">{requests.length}</span>}
                     </button>
+                    {contactGroupConversations.length > 0 && (
+                      <div className="contact-group my-groups-contact-group">
+                        <div className="contact-letter">My Groups</div>
+                        {contactGroupConversations.map((conversation) => (
+                          <button
+                            key={conversation.id}
+                            className={`person-row contact-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
+                            onClick={() => {
+                              if (selectedGroup?.id !== conversation.id) {
+                                loadGroupMessages(conversation);
+                              }
+                            }}
+                          >
+                            <GroupAvatar conversation={conversation} className="avatar contact-avatar group-avatar" />
+                            <span>
+                              <strong>{groupTitle(conversation)}</strong>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {contactGroups.map((group) => (
                       <div className="contact-group" key={group.key}>
                         <div className="contact-letter">{group.key}</div>
@@ -1866,7 +2342,11 @@ export default function App() {
                           <button
                             key={friend.number}
                             className={`person-row contact-row ${selected?.number === friend.number ? "selected" : ""}`}
-                            onClick={() => loadMessages(friend)}
+                            onClick={() => {
+                              if (selected?.number !== friend.number) {
+                                loadMessages(friend);
+                              }
+                            }}
                           >
                             <span
                               className="avatar-button"
@@ -1887,52 +2367,68 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    {chatListItems.map((item) => {
+                    {chatListItems.map((item, index) => {
+                      const separator =
+                        index === pinnedChatListCount && pinnedChatListCount > 0 && pinnedChatListCount < chatListItems.length;
                       if (item.kind === "group") {
                         const { conversation } = item;
                         return (
-                          <button
-                            key={conversation.id}
-                            className={`person-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
-                            onClick={() => loadGroupMessages(conversation)}
-                          >
-                            <span className="chat-avatar-wrap">
-                              <GroupAvatar conversation={conversation} />
-                              {unreadCounts[conversation.id] > 0 && <span className="unread-badge">{unreadCounts[conversation.id]}</span>}
-                            </span>
-                            <span>
-                              <span className="person-title-row">
-                                <strong>{conversationTitle(conversation)}</strong>
-                                {conversationPreviews[conversation.id]?.time && (
-                                  <time className="chat-preview-time">{conversationPreviews[conversation.id].time}</time>
-                                )}
+                          <Fragment key={conversation.id}>
+                            {separator && <div className="chat-list-separator" />}
+                            <button
+                              className={`person-row ${selectedGroup?.id === conversation.id ? "selected" : ""}`}
+                              onClick={() => {
+                                if (selectedGroup?.id !== conversation.id) {
+                                  loadGroupMessages(conversation);
+                                }
+                              }}
+                              onContextMenu={(event) => openChatContextMenu(event, conversation.id, conversationTitle(conversation))}
+                            >
+                              <span className="chat-avatar-wrap">
+                                <GroupAvatar conversation={conversation} />
+                                {unreadCounts[conversation.id] > 0 && <span className="unread-badge">{unreadCounts[conversation.id]}</span>}
                               </span>
-                              <small>{conversationPreviews[conversation.id]?.text ?? "No messages yet"}</small>
-                            </span>
-                          </button>
+                              <span>
+                                <span className="person-title-row">
+                                  <strong>{conversationTitle(conversation)}</strong>
+                                  {conversationPreviews[conversation.id]?.time && (
+                                    <time className="chat-preview-time">{conversationPreviews[conversation.id].time}</time>
+                                  )}
+                                </span>
+                                <small>{conversationPreviews[conversation.id]?.text ?? "No messages yet"}</small>
+                              </span>
+                            </button>
+                          </Fragment>
                         );
                       }
                       const { friend } = item;
                       return (
-                        <button
-                          key={friend.number}
-                          className={`person-row ${selected?.number === friend.number ? "selected" : ""}`}
-                          onClick={() => loadMessages(friend)}
-                        >
-                          <span className="chat-avatar-wrap">
-                            <UserAvatar user={friend} />
-                            {unreadCounts[friend.number] > 0 && <span className="unread-badge">{unreadCounts[friend.number]}</span>}
-                          </span>
-                          <span>
-                            <span className="person-title-row">
-                              <strong>{displayName(friend)}</strong>
-                              {conversationPreviews[friend.number]?.time && (
-                                <time className="chat-preview-time">{conversationPreviews[friend.number].time}</time>
-                              )}
+                        <Fragment key={friend.number}>
+                          {separator && <div className="chat-list-separator" />}
+                          <button
+                            className={`person-row ${selected?.number === friend.number ? "selected" : ""}`}
+                            onClick={() => {
+                              if (selected?.number !== friend.number) {
+                                loadMessages(friend);
+                              }
+                            }}
+                            onContextMenu={(event) => openChatContextMenu(event, friend.number, displayName(friend))}
+                          >
+                            <span className="chat-avatar-wrap">
+                              <UserAvatar user={friend} />
+                              {unreadCounts[friend.number] > 0 && <span className="unread-badge">{unreadCounts[friend.number]}</span>}
                             </span>
-                            <small>{conversationPreviews[friend.number]?.text ?? "No messages yet"}</small>
-                          </span>
-                        </button>
+                            <span>
+                              <span className="person-title-row">
+                                <strong>{displayName(friend)}</strong>
+                                {conversationPreviews[friend.number]?.time && (
+                                  <time className="chat-preview-time">{conversationPreviews[friend.number].time}</time>
+                                )}
+                              </span>
+                              <small>{conversationPreviews[friend.number]?.text ?? "No messages yet"}</small>
+                            </span>
+                          </button>
+                        </Fragment>
                       );
                     })}
                   </>
@@ -2024,6 +2520,8 @@ export default function App() {
                     : selectedGroup?.members.find((member) => member.number === message.sender) ?? selected ?? me;
                 const inviteCard = parseGroupInviteMessage(message);
                 const callMessage = parseCallMessage(message);
+                const audioMessage = isAudioMessage(message);
+                const videoMessage = isVideoMessage(message);
                 const invitePending = inviteCard ? pendingGroupInviteIds.has(inviteCard.invite_id) : false;
                 const inviteJoined = inviteCard ? joinedGroupIds.has(inviteCard.conversation_id) : false;
                 return (
@@ -2037,11 +2535,14 @@ export default function App() {
                           <UserAvatar user={user} className="avatar message-avatar-image" />
                         </button>
                       )}
-                      <div className={`bubble ${message.attachment ? "with-attachment" : ""} ${inviteCard ? "invite-bubble" : ""} ${callMessage ? "call-bubble" : ""}`}>
+                      <div
+                        className={`bubble ${message.attachment ? "with-attachment" : ""} ${audioMessage ? "audio-bubble" : ""} ${inviteCard ? "invite-bubble" : ""} ${callMessage ? "call-bubble" : ""}`}
+                        onContextMenu={(event) => openMessageContextMenu(event, message)}
+                      >
                         {inviteCard ? (
                           <div className="group-invite-card">
                             <strong>{inviteCard.title}</strong>
-                            <small>Group invitation from {inviteCard.inviter}</small>
+                            <small>Group invite from {inviteCard.inviter}</small>
                             {invitePending ? (
                               <button type="button" onClick={() => acceptInvite(inviteCard.invite_id)}>
                                 Accept Invite
@@ -2061,6 +2562,75 @@ export default function App() {
                               <a className="image-message" href={api.fileUrl(message.attachment.url)} target="_blank">
                                 <img src={api.fileUrl(message.attachment.url)} alt={message.attachment.name} />
                               </a>
+                              <div className="attachment-footer">
+                                <span>{message.attachment.name}</span>
+                                <button
+                                  className="file-download"
+                                  type="button"
+                                  onClick={() => downloadAttachment(message.attachment!)}
+                                >
+                                  <Download size={15} />
+                                  Download
+                                </button>
+                              </div>
+                            </div>
+                          ) : audioMessage ? (
+                            <div className="voice-message-wrap">
+                              <div
+                                className={`voice-message ${playingAudioId === message.id ? "playing" : ""}`}
+                                role="button"
+                                tabIndex={0}
+                                onClick={(event) => {
+                                  const audio = event.currentTarget.querySelector("audio");
+                                  if (!audio) {
+                                    return;
+                                  }
+                                  void playVoiceMessage(message, audio);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    event.currentTarget.click();
+                                  }
+                                }}
+                              >
+                                <Mic size={17} />
+                                <span className="voice-wave" aria-hidden="true">
+                                  <i />
+                                  <i />
+                                  <i />
+                                </span>
+                                <span className="voice-duration">{voiceDurationLabel(message)}</span>
+                                <audio
+                                  src={api.fileUrl(message.attachment.url)}
+                                  preload="metadata"
+                                  onPlay={() => setPlayingAudioId(message.id)}
+                                  onPause={() => setPlayingAudioId((current) => (current === message.id ? null : current))}
+                                  onEnded={() => setPlayingAudioId((current) => (current === message.id ? null : current))}
+                                />
+                                <button
+                                  className="file-download"
+                                  type="button"
+                                  title="Download"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    downloadAttachment(message.attachment!);
+                                  }}
+                                >
+                                  <Download size={15} />
+                                </button>
+                              </div>
+                              {(transcribingMessageId === message.id || transcriptions[message.id] || transcriptionErrors[message.id]) && (
+                                <span className={`voice-transcript ${transcriptionErrors[message.id] ? "error" : ""}`}>
+                                  {transcribingMessageId === message.id
+                                    ? "Transcribing..."
+                                    : transcriptionErrors[message.id] || transcriptions[message.id]}
+                                </span>
+                              )}
+                            </div>
+                          ) : videoMessage ? (
+                            <div className="video-message-card">
+                              <video controls src={api.fileUrl(message.attachment.url)} />
                               <div className="attachment-footer">
                                 <span>{message.attachment.name}</span>
                                 <button
@@ -2107,6 +2677,7 @@ export default function App() {
             </div>
             <form className="composer" onSubmit={sendMessage}>
               <textarea
+                ref={textareaRef}
                 {...noTextAssist}
                 placeholder=""
                 value={draft}
@@ -2118,7 +2689,7 @@ export default function App() {
                   }
                 }}
               />
-              <div className="composer-actions">
+              <div className={`composer-meta ${pendingFiles.length > 0 || recordingState !== "idle" ? "active" : ""}`}>
                 {pendingFiles.length > 0 && (
                   <div className="pending-files">
                     {pendingFiles.map((file, index) => (
@@ -2129,6 +2700,57 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                {recordingState !== "idle" && (
+                  <div className="recording-pill">
+                    <span />
+                    {recordingState === "recording" ? `Recording ${recordingSeconds}s` : "Saving voice..."}
+                  </div>
+                )}
+              </div>
+              <div className="composer-actions">
+                <div className="emoji-anchor">
+                  <button
+                    type="button"
+                    className="composer-icon"
+                    title="Emoji"
+                    onClick={() => setEmojiPickerOpen((open) => !open)}
+                  >
+                    <Smile size={17} />
+                  </button>
+                  {emojiPickerOpen && (
+                    <div className="emoji-popover">
+                      <section>
+                        <strong>Emoji</strong>
+                        <div className="emoji-grid">
+                          {EMOJI_ITEMS.map((item) => (
+                            <button key={item} type="button" onClick={() => insertEmojiText(item)}>
+                              {item}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                      <section>
+                        <strong>Kaomoji</strong>
+                        <div className="kaomoji-grid">
+                          {KAOMOJI_ITEMS.map((item) => (
+                            <button key={item} type="button" onClick={() => insertEmojiText(item)}>
+                              {item}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className={`composer-icon voice-record-button ${recordingState === "recording" ? "recording" : ""}`}
+                  disabled={uploading || recordingState === "stopping"}
+                  title={recordingState === "recording" ? "Stop recording" : "Record voice"}
+                  onClick={toggleVoiceRecording}
+                >
+                  {recordingState === "recording" ? <Square size={14} /> : <Mic size={17} />}
+                </button>
                 <button
                   type="button"
                   className="composer-icon"
@@ -2139,14 +2761,12 @@ export default function App() {
                   {uploading ? <ImageIcon size={17} /> : <Paperclip size={17} />}
                 </button>
                 <input ref={fileInputRef} className="file-input" type="file" multiple onChange={sendAttachments} />
-                <button className="send-button" type="submit" disabled={uploading || (!draft.trim() && pendingFiles.length === 0)}>
+                <button className="send-button" type="submit" disabled={uploading || recordingState !== "idle" || (!draft.trim() && pendingFiles.length === 0)}>
                   <Send size={16} />
                   Send
                 </button>
               </div>
-              {(uploadStatus || uploadError) && (
-                <p className={`conversation-status ${uploadError ? "error" : ""}`}>{uploadStatus || uploadError}</p>
-              )}
+              {uploadStatus && <p className="conversation-status">{uploadStatus}</p>}
             </form>
             {conversationMenuOpen && (
               <aside className="conversation-settings" onMouseDown={(event) => event.stopPropagation()}>
@@ -2289,6 +2909,79 @@ export default function App() {
         )}
       </section>
 
+      {chatContextMenu && (
+        <div
+          className="chat-context-menu"
+          style={{ left: chatContextMenu.x, top: chatContextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={() => togglePinnedChat(chatContextMenu.key)}>
+            {pinnedChatKeySet.has(chatContextMenu.key) ? <PinOff size={15} /> : <Pin size={15} />}
+            {pinnedChatKeySet.has(chatContextMenu.key) ? "Unpin" : "Pin"}
+          </button>
+          <button type="button" className="danger" onClick={() => askToDeleteChat(chatContextMenu.key, chatContextMenu.title)}>
+            <Trash2 size={15} />
+            Delete Chat
+          </button>
+        </div>
+      )}
+
+      {messageContextMenu && (
+        <div
+          className="chat-context-menu message-context-menu"
+          style={{ left: messageContextMenu.x, top: messageContextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {messageContextMenu.message.attachment ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  const attachment = messageContextMenu.message.attachment!;
+                  setMessageContextMenu(null);
+                  downloadAttachment(attachment);
+                }}
+              >
+                <Download size={15} />
+                Download
+              </button>
+              {isAudioMessage(messageContextMenu.message) && (
+                <button type="button" onClick={() => transcribeAudioMessage(messageContextMenu.message)}>
+                  <FileText size={15} />
+                  Transcribe
+                </button>
+              )}
+            </>
+          ) : messageContextMenu.message.message ? (
+            <button type="button" onClick={() => copyMessageText(messageContextMenu.message)}>
+              <Copy size={15} />
+              Copy
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      {confirmDialog && (
+        <div className="confirm-overlay" onMouseDown={() => setConfirmDialog(null)}>
+          <section className="confirm-card" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>{confirmDialog.title}</h3>
+            <p>{confirmDialog.body}</p>
+            <div className="confirm-actions">
+              <button type="button" onClick={() => setConfirmDialog(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={confirmDialog.destructive ? "destructive" : ""}
+                onClick={confirmDialogAction}
+              >
+                {confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {callState.status !== "idle" && (
         <div className="call-overlay">
           {(() => {
@@ -2406,21 +3099,21 @@ export default function App() {
                     <p>Name: {profileCard.user.nickname || profileCard.user.number}</p>
                     <p>FeaChat ID: {profileCard.user.number}</p>
                   </div>
-                  {profileCard.canDelete && (
-                    <>
-                      <button className="profile-more" type="button" onClick={() => setProfileMenuOpen((open) => !open)}>
-                        <MoreHorizontal size={22} />
-                      </button>
-                      {profileMenuOpen && (
-                        <div className="profile-menu">
-                          <button type="button" onClick={deleteFromProfile}>
-                            Delete Friend
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
                 </div>
+                {profileCard.canDelete && (
+                  <>
+                    <button className="profile-more" type="button" onClick={() => setProfileMenuOpen((open) => !open)}>
+                      <MoreHorizontal size={20} />
+                    </button>
+                    {profileMenuOpen && (
+                      <div className="profile-menu">
+                        <button type="button" onClick={deleteFromProfile}>
+                          Delete Friend
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
                 <div className="profile-meta">
                   <div className="editable-row profile-editable-row">
                     <span>Alias</span>

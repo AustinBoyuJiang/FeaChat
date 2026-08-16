@@ -41,17 +41,17 @@ function playTones(tones: Tone[]) {
 
 export function playIncomingMessageSound() {
   playTones([
-    { frequency: 880, start: 0, duration: 0.08, gain: 0.08 },
-    { frequency: 1175, start: 0.09, duration: 0.11, gain: 0.07 }
+    { frequency: 880, start: 0, duration: 0.08, gain: 0.16 },
+    { frequency: 1175, start: 0.09, duration: 0.11, gain: 0.14 }
   ]);
 }
 
 export function playIncomingCallSound() {
   playTones([
-    { frequency: 660, start: 0, duration: 0.16, gain: 0.08 },
-    { frequency: 880, start: 0.18, duration: 0.16, gain: 0.08 },
-    { frequency: 660, start: 0.42, duration: 0.16, gain: 0.07 },
-    { frequency: 880, start: 0.6, duration: 0.18, gain: 0.07 }
+    { frequency: 660, start: 0, duration: 0.16, gain: 0.15 },
+    { frequency: 880, start: 0.18, duration: 0.16, gain: 0.15 },
+    { frequency: 660, start: 0.42, duration: 0.16, gain: 0.13 },
+    { frequency: 880, start: 0.6, duration: 0.18, gain: 0.13 }
   ]);
 }
 

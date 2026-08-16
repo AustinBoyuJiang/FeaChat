@@ -21,9 +21,10 @@
 .profile-top {
   position: relative;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 26px;
+  grid-template-columns: 48px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
+  padding-right: 32px;
 }
 
 .profile-avatar {
@@ -71,27 +72,36 @@
 }
 
 .profile-more {
+  position: absolute;
+  top: 14px;
+  right: 14px;
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border: 0;
   border-radius: 4px;
+  padding: 0;
   color: var(--profile-muted);
   background: transparent;
+  line-height: 0;
 }
 
 .profile-more:hover {
   background: var(--profile-hover);
 }
 
+.profile-more svg {
+  display: block;
+}
+
 .profile-menu {
   position: absolute;
-  top: 30px;
-  right: 0;
+  top: 44px;
+  right: 14px;
   z-index: 2;
-  width: 132px;
-  padding: 5px;
+  width: 116px;
+  padding: 4px;
   border: 1px solid var(--profile-line);
   border-radius: 5px;
   background: var(--profile-menu-bg);
@@ -100,11 +110,14 @@
 
 .profile-menu button {
   width: 100%;
-  min-height: 30px;
+  min-height: 26px;
   border: 0;
   border-radius: 4px;
   color: var(--profile-fg);
   background: transparent;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 400;
   text-align: left;
 }
 
@@ -172,14 +185,14 @@
   grid-column: auto;
   color: var(--profile-muted);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .profile-editable-row strong {
   overflow-wrap: anywhere;
   color: var(--profile-fg);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   white-space: normal;
 }
 
@@ -440,7 +453,7 @@
   overflow: hidden;
   border: 1px solid var(--modal-line);
   border-radius: 8px;
-  padding: 18px;
+  padding: 16px;
   color: var(--modal-fg);
   background: var(--modal-bg);
   box-shadow: 0 22px 70px var(--modal-shadow);
@@ -450,7 +463,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 
 .settings-panel h2,
@@ -460,12 +473,14 @@
 }
 
 .settings-panel h2 {
-  font-size: 20px;
+  font-size: 17px;
+  font-weight: 650;
 }
 
 .settings-panel h3 {
   margin-bottom: 10px;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 650;
   color: var(--modal-muted);
   text-transform: uppercase;
 }
@@ -483,7 +498,7 @@
 
 .settings-section {
   border-top: 1px solid var(--modal-line);
-  padding-top: 16px;
+  padding-top: 14px;
 }
 
 .settings-body {
@@ -502,14 +517,15 @@
 }
 
 .settings-nav button {
-  height: 36px;
+  height: 32px;
   border: 0;
   border-radius: 5px;
   padding: 0 12px;
   color: var(--modal-muted);
   background: transparent;
+  font-size: 13px;
   text-align: left;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .settings-nav button:hover,
@@ -522,12 +538,12 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 0 0 18px;
+  padding: 14px 0 0 16px;
 }
 
 .account-settings {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .account-avatar-row {
@@ -552,26 +568,26 @@
 
 .account-avatar-row button,
 .settings-save {
-  height: 32px;
+  height: 30px;
   border: 0;
   border-radius: 5px;
   color: #ffffff;
   background: var(--accent);
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .account-avatar-row button {
   width: 128px;
   margin-top: 8px;
-  font-size: 13px;
 }
 
 .account-settings label {
   display: grid;
   gap: 6px;
   color: var(--modal-muted);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .password-fields {
@@ -596,10 +612,10 @@
   grid-template-rows: auto auto;
   column-gap: 12px;
   align-items: center;
-  min-height: 64px;
+  min-height: 58px;
   border: 1px solid var(--modal-line);
   border-radius: 7px;
-  padding: 10px;
+  padding: 9px;
   color: var(--modal-fg);
   background: var(--modal-bg);
   text-align: left;
@@ -621,6 +637,11 @@
 .theme-options small {
   color: var(--modal-muted);
   font-size: 12px;
+}
+
+.theme-options strong {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .theme-preview {
@@ -651,4 +672,101 @@
 
 .settings-note.error {
   color: #b45309;
+}
+
+.chat-context-menu {
+  position: fixed;
+  z-index: 120;
+  display: grid;
+  width: 166px;
+  overflow: hidden;
+  border: 1px solid var(--menu-border);
+  border-radius: 6px;
+  padding: 4px;
+  color: var(--menu-fg);
+  background: var(--menu-bg);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+}
+
+.chat-context-menu button {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 10px;
+  color: inherit;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.chat-context-menu button:hover {
+  background: var(--menu-hover);
+}
+
+.chat-context-menu button.danger {
+  color: #ff4d4f;
+}
+
+.message-context-menu {
+  width: 174px;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.confirm-card {
+  width: min(360px, calc(100vw - 40px));
+  border: 1px solid var(--modal-line);
+  border-radius: 8px;
+  padding: 18px;
+  color: var(--modal-fg);
+  background: var(--modal-bg);
+  box-shadow: 0 22px 70px var(--modal-shadow);
+}
+
+.confirm-card h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.confirm-card p {
+  margin: 10px 0 0;
+  color: var(--modal-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.confirm-actions button {
+  min-width: 78px;
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 14px;
+  color: var(--modal-fg);
+  background: var(--modal-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.confirm-actions button.destructive {
+  color: #ffffff;
+  background: #ff4d4f;
 }

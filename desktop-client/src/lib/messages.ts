@@ -91,13 +91,39 @@ export function formatBytes(size: number) {
 
 export function messagePreview(message: Message) {
   if (message.type === "group_invite") {
-    return "[Group Invite]";
+    const invite = parseGroupInviteMessage(message);
+    return invite?.title ? `[Group Invite] ${invite.title}` : "[Group Invite]";
   }
   if (message.type === "call") {
     return formatCallMessage(message);
   }
   if (message.attachment) {
-    return message.attachment.name || (isImageMessage(message) ? "Image" : "File");
+    const attachmentName = message.attachment.name.trim();
+    if (isAudioMessage(message)) {
+      const duration = voiceDurationLabel(message);
+      return duration ? `[Audio] ${duration}` : attachmentName ? `[Audio] ${attachmentName}` : "[Audio]";
+    }
+    if (isImageMessage(message)) {
+      return attachmentName ? `[Image] ${attachmentName}` : "[Image]";
+    }
+    if (isVideoMessage(message)) {
+      return attachmentName ? `[Video] ${attachmentName}` : "[Video]";
+    }
+    return attachmentName ? `[File] ${attachmentName}` : "[File]";
+  }
+  const messageText = message.message.trim();
+  if (isAudioMessage(message)) {
+    const duration = voiceDurationLabel(message);
+    return duration ? `[Audio] ${duration}` : messageText ? `[Audio] ${messageText}` : "[Audio]";
+  }
+  if (isImageMessage(message)) {
+    return messageText ? `[Image] ${messageText}` : "[Image]";
+  }
+  if (isVideoMessage(message)) {
+    return messageText ? `[Video] ${messageText}` : "[Video]";
+  }
+  if (message.type === "file") {
+    return messageText ? `[File] ${messageText}` : "[File]";
   }
   return message.message || "[Message]";
 }
@@ -154,5 +180,36 @@ export function parseGroupInviteMessage(message: Message) {
 }
 
 export function isImageMessage(message: Message) {
-  return message.type === "image" || message.attachment?.mime_type.startsWith("image/");
+  return message.type === "image" || message.attachment?.mime_type.startsWith("image/") || hasFileExtension(message, IMAGE_EXTENSIONS);
+}
+
+export function isAudioMessage(message: Message) {
+  return (
+    message.type === "audio" ||
+    message.attachment?.mime_type.startsWith("audio/") ||
+    hasFileExtension(message, AUDIO_EXTENSIONS) ||
+    /^voice message\s+\d+s\./i.test(message.attachment?.name || message.message || "")
+  );
+}
+
+export function isVideoMessage(message: Message) {
+  return message.type === "video" || message.attachment?.mime_type.startsWith("video/") || hasFileExtension(message, VIDEO_EXTENSIONS);
+}
+
+export function voiceDurationLabel(message: Message) {
+  const filename = message.attachment?.name || message.message || "";
+  const match = filename.match(/Voice message\s+(\d+)s/i);
+  if (!match) {
+    return "";
+  }
+  return `${match[1]}"`;
+}
+
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif", ".tiff"];
+const AUDIO_EXTENSIONS = [".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus", ".flac"];
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"];
+
+function hasFileExtension(message: Message, extensions: string[]) {
+  const name = (message.attachment?.name || message.message || "").toLowerCase();
+  return extensions.some((extension) => name.endsWith(extension));
 }
