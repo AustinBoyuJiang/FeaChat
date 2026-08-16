@@ -45,7 +45,104 @@ def _make_simple_dialog(title_str, width=800, height=600):
     return _Dialog
 
 
-addFriendsUi = _make_simple_dialog("Add Friends")
+class addFriendsUi(QWidget):
+    width = 500
+    height = 390
+    titleWidth = 500
+    titleHeight = 40
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.resize(self.width, self.height)
+        self.parent.setWindowTitle("Add Friends")
+        self.parent.setWindowIcon(QIcon("pic/logo/logo.png"))
+        self.setStyleSheet("background-color: #ffffff;border-radius: 10px;")
+        self.content = QLabel(self)
+        self.content.setGeometry(0, 0, self.width, self.height)
+        self.content.setStyleSheet("background-color: #ffffff;border-radius: 10px;")
+
+        self.titleText = QLabel(self)
+        self.titleText.setGeometry(16, 0, 300, 40)
+        self.titleText.setText("Add Friends")
+        self.titleText.setStyleSheet("font-family: Arial;font-size: 18px;color: #727272;background-color: transparent;")
+
+        self.closeButton = QPushButton(self)
+        self.closeButton.setGeometry(self.width - 45, 5, 40, 30)
+        self.closeButton.setText("×")
+        self.closeButton.clicked.connect(self.parent.close)
+        self.closeButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 22px;color: #727272;background-color: transparent;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #e1e1e1;}")
+
+        self.searchEdit = QLineEdit(self)
+        self.searchEdit.setGeometry(24, 62, 342, 42)
+        self.searchEdit.setPlaceholderText("Search number or nickname")
+        self.searchEdit.returnPressed.connect(self.search)
+        self.searchEdit.setStyleSheet("font-family: Arial;font-size: 16px;color: #111111;background-color: #f5f5f5;border: 1px solid #d0d0d0;border-radius: 6px;padding-left: 12px;")
+
+        self.searchButton = QPushButton(self)
+        self.searchButton.setGeometry(378, 62, 94, 42)
+        self.searchButton.setText("Search")
+        self.searchButton.clicked.connect(self.search)
+        self.searchButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 16px;color: #ffffff;background-color: #0076F6;border: 0px;border-radius: 6px;}QPushButton:hover{background-color: #006bdf;}")
+
+        self.statusText = QLabel(self)
+        self.statusText.setGeometry(24, 112, 448, 28)
+        self.statusText.setStyleSheet("font-family: Arial;font-size: 14px;color: #777777;background-color: transparent;")
+
+        self.resultList = QListWidget(self)
+        self.resultList.setGeometry(24, 148, 448, 216)
+        self.resultList.setStyleSheet("QListWidget{background-color: #ffffff;border: 1px solid #eeeeee;border-radius: 6px;outline: none;}QListWidget::item{border-bottom: 1px solid #eeeeee;}")
+        self.show()
+
+    def search(self):
+        keyword = self.searchEdit.text().strip()
+        self.resultList.clear()
+        if not keyword:
+            self.statusText.setText("Enter a number or nickname.")
+            return
+        results = core.feachat.searchUsers(keyword)
+        if not results:
+            self.statusText.setText("No users found.")
+            return
+        self.statusText.setText(f"{len(results)} user(s) found.")
+        for number, nickname, avatar, motto in results:
+            item = QListWidgetItem(self.resultList)
+            item.setSizeHint(QSize(448, 64))
+            self.resultList.setItemWidget(item, self.resultItem(number, nickname, motto))
+
+    class resultItem(QWidget):
+        def __init__(self, number, nickname, motto):
+            super().__init__()
+            self.number = number
+            self.setStyleSheet("background-color: transparent;")
+            self.nameText = QLabel(self)
+            self.nameText.setGeometry(14, 8, 260, 24)
+            self.nameText.setText(f"{nickname or number} ({number})")
+            self.nameText.setStyleSheet("font-family: Arial;font-size: 16px;color: #222222;background-color: transparent;")
+            self.mottoText = QLabel(self)
+            self.mottoText.setGeometry(14, 34, 310, 20)
+            self.mottoText.setText(motto or "")
+            self.mottoText.setStyleSheet("font-family: Arial;font-size: 13px;color: #777777;background-color: transparent;")
+            self.addButton = QPushButton(self)
+            self.addButton.setGeometry(338, 14, 86, 36)
+            self.addButton.setText("Request")
+            self.addButton.clicked.connect(self.add)
+            self.addButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 14px;color: #ffffff;background-color: #0076F6;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #006bdf;}QPushButton:disabled{background-color: #aaaaaa;}")
+
+        def add(self):
+            request = core.feachat.addFriend(self.number)
+            if request[0]:
+                self.addButton.setText("Sent")
+                self.addButton.setEnabled(False)
+                try:
+                    cw = core.feachat.chatWindow.mainWindow
+                    if cw.page == "Contacts":
+                        cw.switchContacts()
+                except Exception:
+                    pass
+            else:
+                self.addButton.setText("Failed")
+
 createGroupUi = _make_simple_dialog("Create Group")
 shareMomentsUi = _make_simple_dialog("Share Moments")
 settingUi = _make_simple_dialog("Setting")

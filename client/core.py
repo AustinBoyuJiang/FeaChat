@@ -3,6 +3,7 @@
 import _thread
 import base64
 import ctypes
+import json
 import os
 import socket
 import sys
@@ -13,7 +14,9 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-DEV_MODE = True
+DEV_MODE = os.getenv("FEACHAT_DEV_MODE", "false").lower() in {"1", "true", "yes", "on"}
+SERVER_HOST = os.getenv("FEACHAT_SERVER_HOST", "127.0.0.1")
+SERVER_PORT = int(os.getenv("FEACHAT_SERVER_PORT", "8888"))
 
 DEV_MOCK_USERS = {
     "alice": ["Alice",    "dev_avatar", "dev_bg", "1995-03-12", "Girl", "Hello, I'm Alice!"],
@@ -83,10 +86,22 @@ class feachatUi:
     def request(self, *request):
         if not self.connect:
             return (False, "Server not connected")
-        # 发送：4字节长度头 + 数据
-        encoded = repr(request).encode("utf-8")
+        action, *payload = request
+        encoded = json.dumps(
+            {"action": action, "payload": payload},
+            ensure_ascii=False,
+        ).encode("utf-8")
         self.server.sendall(len(encoded).to_bytes(4, "big") + encoded)
-        # 接收：先读4字节长度头，再读完整数据
+
+        while True:
+            response = self._recv_json()
+            event = response.get("data", {}).get("event") if isinstance(response.get("data"), dict) else None
+            if event == "message":
+                self._handle_server_event(response["data"])
+                continue
+            return self._adapt_response(action, response)
+
+    def _recv_json(self):
         header = b""
         while len(header) < 4:
             header += self.server.recv(4 - len(header))
@@ -94,12 +109,35 @@ class feachatUi:
         data = b""
         while len(data) < length:
             data += self.server.recv(min(65536, length - len(data)))
-        return eval(data.decode("utf-8"))
+        return json.loads(data.decode("utf-8"))
+
+    def _adapt_response(self, action, response):
+        if not response.get("ok"):
+            return (False, response.get("error") or "Request failed")
+        data = response.get("data")
+        if action == "login" and isinstance(data, dict):
+            self.all_message = data.get("messages", [])
+            return (True, data.get("message", "succeeded"))
+        return (True, data)
+
+    def _handle_server_event(self, event):
+        if event.get("event") == "message":
+            message = event.get("message")
+            if not message:
+                return
+            try:
+                self.chatWindow.mainWindow.new_message(message)
+            except Exception:
+                if not hasattr(self, "all_message"):
+                    self.all_message = []
+                if not any(existing[0] == message[0] for existing in self.all_message):
+                    self.all_message.append(message)
 
     def uiSetting(self):
         if sys.platform == "win32":
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(self.name)
         app = QApplication(sys.argv)
+        app.setFont(QFont("Arial", 12))
         app.setEffectEnabled(Qt.UI_AnimateCombo, False)
         return app
 
@@ -162,6 +200,40 @@ class feachatUi:
     def modifyUserInfo(self, number, type, value):
         self.request("modifyUserInfo", number, type, value)
 
+    def getMessages(self, peer=None, limit=200):
+        if peer is None:
+            request = self.request("getMessages")
+        else:
+            request = self.request("getMessages", peer, limit)
+        return request
+
+    def sendMessage(self, receiver, message_type, message):
+        return self.request("sendMessage", receiver, message_type, message)
+
+    def searchUsers(self, keyword):
+        request = self.request("searchUsers", keyword)
+        return request[1] if request[0] else []
+
+    def addFriend(self, number):
+        return self.request("addFriend", number)
+
+    def getFriends(self):
+        request = self.request("getFriends")
+        return request[1] if request[0] else []
+
+    def getFriendRequests(self):
+        request = self.request("getFriendRequests")
+        return request[1] if request[0] else []
+
+    def acceptFriendRequest(self, number):
+        return self.request("acceptFriendRequest", number)
+
+    def rejectFriendRequest(self, number):
+        return self.request("rejectFriendRequest", number)
+
+    def deleteFriend(self, number):
+        return self.request("deleteFriend", number)
+
     def getTempFile(self, id):
         return
 
@@ -190,6 +262,12 @@ class feachatUi:
         data = base64.b64encode(file.read()).decode("utf-8")
         file.close()
         return (size, name, extension, data)
+
+    def get_file_info(self, id):
+        request = self.request("getFileInfo", id)
+        if request[0]:
+            return request[1]
+        return [0, str(id), ""]
 
 
 feachat = None

@@ -2,7 +2,10 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from config import EMAIL_ACCOUNT, EMAIL_PASSWORD, EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT
+try:
+    from .config import EMAIL_ACCOUNT, EMAIL_PASSWORD, EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT
+except ImportError:
+    from config import EMAIL_ACCOUNT, EMAIL_PASSWORD, EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT
 
 
 def send_email(to_address: str, content: MIMEText, subject: str):

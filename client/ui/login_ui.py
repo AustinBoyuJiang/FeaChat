@@ -11,7 +11,7 @@ from core import DEV_MODE
 
 class loginUi(QWidget):
     width = 400
-    height = 600
+    height = 560
     titleWidth = 400
     titleHeight = 40
 
@@ -36,46 +36,53 @@ class loginUi(QWidget):
             def initWindow(self):
                 self.item.setText(self.number)
                 self.item.setSizeHint(QSize(300, 60))
+                self.resize(300, 60)
 
             def initItemArea(self):
                 self.itemArea = QLabel(self)
                 self.itemArea.setGeometry(0, 0, 300, 60)
-                self.itemArea.setStyleSheet("background-color: #ebebeb;")
+                self.itemArea.setStyleSheet("background-color: #ffffff;")
 
             def initAvatarShow(self):
                 self.avatarShow = QLabel(self)
-                self.avatarShow.setGeometry(20, 10, 40, 40)
+                self.avatarShow.setGeometry(16, 10, 40, 40)
                 self.avatarShow.setScaledContents(True)
+                self.avatarShow.setPixmap(QPixmap("pic/logo/avatar.png"))
+                self.avatarShow.setStyleSheet("background-color: transparent;border-radius: 20px;")
 
             def initNumberShow(self):
                 self.numberShow = QLabel(self)
-                self.numberShow.setGeometry(70, 10, 160, 20)
+                self.numberShow.setGeometry(68, 10, 160, 22)
                 self.numberShow.setText(self.number)
-                self.numberShow.setStyleSheet("font-family: Microsoft YaHei; font-size: 14px; color: #333333; background: transparent;")
+                self.numberShow.setStyleSheet("font-family: Arial; font-size: 15px; color: #222222; background: transparent;")
 
             def initNicknameShow(self):
-                pass  # 暂无昵称缓存，留空
+                self.nicknameShow = QLabel(self)
+                self.nicknameShow.setGeometry(68, 33, 150, 18)
+                self.nicknameShow.setText("Saved account")
+                self.nicknameShow.setStyleSheet("font-family: Arial; font-size: 12px; color: #888888; background: transparent;")
 
             def initRemoveButton(self):
                 self.removeButton = QPushButton(self)
-                self.removeButton.setText("x")
-                self.removeButton.setGeometry(255, 15, 30, 30)
+                self.removeButton.setText("×")
+                self.removeButton.setGeometry(252, 15, 30, 30)
                 self.removeButton.clicked.connect(self.remove)
+                self.removeButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 16px;color: #777777;background-color: transparent;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #eeeeee;}")
 
             def remove(self):
                 self.parent.parent.switchRemoveAccountPage(self.number)
 
             def eventFilter(self, object, event):
                 if event.type() == QEvent.Enter:
-                    self.itemArea.setStyleSheet("background-color: #d0d0d0;")
+                    self.itemArea.setStyleSheet("background-color: #f0f0f0;")
                     self.eventFlag = True
                 elif event.type() == QEvent.Leave:
-                    self.itemArea.setStyleSheet("background-color: #ebebeb;")
+                    self.itemArea.setStyleSheet("background-color: #ffffff;")
                     self.eventFlag = False
                 if self.parent.numberEdit.lineEdit().text() == self.number:
-                    self.itemArea.setStyleSheet("background-color: #d0d0d0;")
+                    self.itemArea.setStyleSheet("background-color: #e8f1ff;")
                 elif not self.eventFlag:
-                    self.itemArea.setStyleSheet("background-color: #ebebeb;")
+                    self.itemArea.setStyleSheet("background-color: #ffffff;")
                 return QWidget.eventFilter(self, object, event)
 
         def __init__(self, parent):
@@ -122,6 +129,7 @@ class loginUi(QWidget):
             self.numberSelect = QListWidget()
             self.numberSelect.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.numberSelect.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+            self.numberSelect.setStyleSheet("QListWidget{background-color: #ffffff;border: 1px solid #dddddd;outline: none;}QListWidget::item{height: 60px;}")
             self.numberEdit.setView(self.numberSelect)
             self.numberEdit.setModel(self.numberSelect.model())
             validator = QRegExpValidator(QRegExp("[a-zA-Z0-9_]+$"), self)
@@ -755,18 +763,18 @@ class loginUi(QWidget):
 
     def initLoginArea(self):
         self.loginArea = QLabel(self)
-        self.loginArea.setGeometry(0, 40, 400, 560)
+        self.loginArea.setGeometry(0, 40, 400, 520)
         self.loginArea.setObjectName("loginArea")
 
     def initPromptSucceededArea(self):
         self.promptSucceededArea = QLabel(self)
-        self.promptSucceededArea.setGeometry(0, 550, 400, 50)
+        self.promptSucceededArea.setGeometry(0, 510, 400, 50)
         self.promptSucceededArea.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
         self.promptSucceededArea.setObjectName("promptSucceededArea")
 
     def initPromptErrorArea(self):
         self.promptErrorArea = QLabel(self)
-        self.promptErrorArea.setGeometry(0, 550, 400, 50)
+        self.promptErrorArea.setGeometry(0, 510, 400, 50)
         self.promptErrorArea.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
         self.promptErrorArea.setObjectName("promptErrorArea")
 
@@ -782,12 +790,12 @@ class loginUi(QWidget):
 
     def initPromptSucceededFilling(self):
         self.promptSucceededFilling = QLabel(self)
-        self.promptSucceededFilling.setGeometry(0, 550, 400, 10)
+        self.promptSucceededFilling.setGeometry(0, 510, 400, 10)
         self.promptSucceededFilling.setObjectName("promptSucceededFilling")
 
     def initPromptErrorFilling(self):
         self.promptErrorFilling = QLabel(self)
-        self.promptErrorFilling.setGeometry(0, 550, 400, 10)
+        self.promptErrorFilling.setGeometry(0, 510, 400, 10)
         self.promptErrorFilling.setObjectName("promptErrorFilling")
 
     def initTitleText(self):

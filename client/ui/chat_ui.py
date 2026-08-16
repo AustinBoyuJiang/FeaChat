@@ -7,7 +7,7 @@ from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
 import core
-from core import get_user_info, download_file
+from core import DEV_MODE, get_user_info, download_file
 
 
 class chatUi(QWidget):
@@ -148,7 +148,7 @@ class chatUi(QWidget):
                 self.nicknameShow.move(100, 15)
                 self.nicknameShow.setText(self.nickname)
                 self.nicknameShow.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                self.nicknameShow.setStyleSheet("font-family: Microsoft YaHei;font-size: 20px;background-color: transparent;")
+                self.nicknameShow.setStyleSheet("font-family: Arial;font-size: 18px;color: #222222;background-color: transparent;")
 
             def initLastMessageShow(self):
                 self.lastMessageShow = QLabel(self)
@@ -242,20 +242,136 @@ class chatUi(QWidget):
             core.feachat.chatWindow.mainWindow.retakeMore()
             super().mouseReleaseEvent(event)
 
+    class contactList(QListWidget):
+        class contactSelectBox(QWidget):
+            def __init__(self, item, number, nickname, avatar, motto):
+                super().__init__()
+                self.number = number
+                self.nickname = nickname or number
+                self.avatar = avatar
+                self.motto = motto or ""
+                item.setSizeHint(QSize(375, 76))
+                self.resize(375, 76)
+                self.avatarShow = QLabel(self)
+                self.avatarShow.setGeometry(18, 13, 50, 50)
+                self.avatarShow.setScaledContents(True)
+                if avatar is not None:
+                    download_file(avatar, "data")
+                    self.avatarShow.setPixmap(QPixmap("data/temp/%s" % avatar))
+                self.avatarShow.setStyleSheet("background-color: transparent;border-radius: 25px;")
+                self.nicknameShow = QLabel(self)
+                self.nicknameShow.setGeometry(86, 13, 220, 24)
+                self.nicknameShow.setText(self.nickname)
+                self.nicknameShow.setStyleSheet("font-family: Arial;font-size: 17px;color: #222222;background-color: transparent;")
+                self.mottoShow = QLabel(self)
+                self.mottoShow.setGeometry(86, 39, 260, 22)
+                self.mottoShow.setText(self.motto)
+                self.mottoShow.setStyleSheet("font-family: Arial;font-size: 13px;color: #888888;background-color: transparent;")
+                self.deleteButton = QPushButton(self)
+                self.deleteButton.setGeometry(300, 20, 58, 32)
+                self.deleteButton.setText("Delete")
+                self.deleteButton.clicked.connect(self.delete)
+                self.deleteButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 12px;color: #555555;background-color: #eeeeee;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #dddddd;}")
+
+            def delete(self):
+                core.feachat.deleteFriend(self.number)
+                cw = core.feachat.chatWindow.mainWindow
+                cw.switchContacts()
+
+        class requestSelectBox(QWidget):
+            def __init__(self, item, number, nickname, avatar, motto):
+                super().__init__()
+                self.number = number
+                item.setSizeHint(QSize(375, 88))
+                self.resize(375, 88)
+                self.label = QLabel(self)
+                self.label.setGeometry(18, 8, 330, 20)
+                self.label.setText("Friend request")
+                self.label.setStyleSheet("font-family: Arial;font-size: 12px;color: #0076F6;background-color: transparent;")
+                self.nameText = QLabel(self)
+                self.nameText.setGeometry(18, 30, 210, 22)
+                self.nameText.setText(f"{nickname or number} ({number})")
+                self.nameText.setStyleSheet("font-family: Arial;font-size: 16px;color: #222222;background-color: transparent;")
+                self.acceptButton = QPushButton(self)
+                self.acceptButton.setGeometry(225, 42, 62, 32)
+                self.acceptButton.setText("Accept")
+                self.acceptButton.clicked.connect(self.accept)
+                self.acceptButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 12px;color: #ffffff;background-color: #0076F6;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #006bdf;}")
+                self.rejectButton = QPushButton(self)
+                self.rejectButton.setGeometry(296, 42, 62, 32)
+                self.rejectButton.setText("Reject")
+                self.rejectButton.clicked.connect(self.reject)
+                self.rejectButton.setStyleSheet("QPushButton{font-family: Arial;font-size: 12px;color: #555555;background-color: #eeeeee;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #dddddd;}")
+
+            def accept(self):
+                core.feachat.acceptFriendRequest(self.number)
+                core.feachat.chatWindow.mainWindow.switchContacts()
+
+            def reject(self):
+                core.feachat.rejectFriendRequest(self.number)
+                core.feachat.chatWindow.mainWindow.switchContacts()
+
+        def __init__(self, parent):
+            super().__init__(parent)
+            self.resize(375, 765)
+            self.move(75, 75)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+            self.itemClicked.connect(self.showMessageList)
+            self.setStyleSheet("QListWidget {background-color: #ffffff;outline: none;border:0px;}"
+                               "QListWidget:Item:hover{background-color: #e0e0e0;}"
+                               "QListWidget:Item:selected{background-color: #d0d0d0;}")
+            self.number_item = {}
+            for number, nickname, avatar, motto, created_at in core.feachat.getFriendRequests():
+                item = QListWidgetItem()
+                self.addItem(item)
+                self.setItemWidget(item, self.requestSelectBox(item, number, nickname, avatar, motto))
+            for number, nickname, avatar, motto in core.feachat.getFriends():
+                info = get_user_info(number)
+                core.feachat.user_info[number] = info
+                item = QListWidgetItem()
+                self.number_item[number] = item
+                self.addItem(item)
+                self.setItemWidget(item, self.contactSelectBox(item, number, info[0], info[1], info[5]))
+            self.show()
+
+        def showMessageList(self):
+            if not self.selectedItems():
+                return
+            widget = self.itemWidget(self.selectedItems()[0])
+            if not isinstance(widget, self.contactSelectBox):
+                return
+            number = widget.number
+            cw = core.feachat.chatWindow.mainWindow
+            cw.titleText.setText(core.feachat.user_info[number][0])
+            cw.close_content()
+            cw.set_content(cw.messageContent(cw, number))
+
+        def mouseReleaseEvent(self, event):
+            core.feachat.chatWindow.mainWindow.retakeMore()
+            super().mouseReleaseEvent(event)
+
     class messageContent(QListWidget):
         class timeBox(QWidget):
             def __init__(self, item, datetime):
                 super().__init__()
                 self.item = item
                 self.text = set_time(datetime)
-                self.resize(750, 60)
-                self.item.setSizeHint(QSize(750, 60))
+                width = message_area_width()
+                self.resize(width, 60)
+                self.item.setSizeHint(QSize(width, 60))
                 self.timeLabel = QLabel(self)
-                self.timeLabel.resize(750, 60)
+                self.timeLabel.resize(width, 60)
                 self.timeLabel.move(0, 0)
                 self.timeLabel.setText(self.text)
                 self.timeLabel.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
                 self.timeLabel.setStyleSheet("font-family: Microsoft YaHei;font-size: 17px;color: #aaaaaa;background-color: transparent")
+
+            def relayout(self, width):
+                self.resize(width, 60)
+                self.item.setSizeHint(QSize(width, 60))
+                self.timeLabel.resize(width, 60)
 
         class rightTextBox(QWidget):
             def __init__(self, item, message_info):
@@ -263,7 +379,7 @@ class chatUi(QWidget):
                 self.item = item
                 self.text_height = 21
                 self.font_size = 10
-                self.startX = 100
+                self.startX = 86
                 self.startY = 20
                 self.radius = 8
                 self.width_border = 15
@@ -274,56 +390,56 @@ class chatUi(QWidget):
                 self.profile_picture = "data/temp/%s" % core.feachat.user_info[self.sender][1]
                 self.avatarShow = QPushButton(self)
                 self.avatarShow.resize(50, 50)
-                self.avatarShow.move(670, self.startY - 5)
+                self.avatarShow.move(message_area_width() - 72, self.startY - 5)
                 self.avatarShow.clicked.connect(self.showUserInfo)
                 self.avatarShow.setStyleSheet("border-radius: 25px;border-image: url(%s);" % self.profile_picture)
 
             def paintEvent(self, event):
                 text = self.text
-                text_height = self.text_height
-                font_size = self.font_size
                 startX = self.startX; startY = self.startY; radius = self.radius
-                width_border = self.width_border; height_border = self.height_border; max_length = self.max_length
-                font = QPainter(self)
-                font.setFont(QFont("Microsoft YaHei", font_size))
+                width_border = self.width_border; height_border = self.height_border
+                boxWidth = message_area_width()
+                max_length = max(120, min(self.max_length, boxWidth - startX - 120))
+                self.avatarShow.move(boxWidth - 72, self.startY - 5)
+                font = QFont("Arial", 13)
+                metrics = QFontMetrics(font)
                 all_line = []; left, right = 0, 0
                 while left < len(text):
-                    while right <= len(text) and font.fontMetrics().boundingRect(text[left:right]).width() <= max_length:
+                    while right <= len(text) and metrics.boundingRect(text[left:right]).width() <= max_length:
                         right += 1
                     right -= 1
                     all_line.append(text[left:right]); left = right
-                line_height = font.fontMetrics().boundingRect(text).height()
-                width = min(max_length, font.fontMetrics().boundingRect(text).width()) + width_border * 2
+                line_height = metrics.height()
+                width = min(max_length, max(metrics.boundingRect(line).width() for line in all_line)) + width_border * 2
                 height = len(all_line) * line_height + height_border * 2
-                boxWidth, boxHeight = 750, height + startY * 2 + 20
+                boxHeight = height + startY * 2 + 20
                 self.resize(boxWidth, boxHeight); self.item.setSizeHint(QSize(boxWidth, boxHeight))
                 p = QPainter(self); brush = QBrush(Qt.SolidPattern)
-                p.setFont(QFont("Microsoft YaHei", font_size))
-                p.setPen(QColor("#c9e7ff")); brush.setColor(QColor("#c9e7ff")); p.setBrush(brush); p.begin(self)
+                p.setRenderHint(QPainter.Antialiasing)
+                p.setFont(font)
+                p.setPen(QColor("#c9e7ff")); brush.setColor(QColor("#c9e7ff")); p.setBrush(brush)
                 tri = QPolygon()
                 tri.setPoints(boxWidth-startX+10, startY+20, boxWidth-startX, startY+20, boxWidth-startX, startY+32)
                 p.drawPolygon(tri)
-                p.drawRect(boxWidth-startX-width+radius, startY+20, width-radius*2, height)
-                p.drawRect(boxWidth-startX-width, startY+radius+20, width, height-radius*2)
-                p.drawRect(boxWidth-startX-radius*2, startY+20, radius*2, radius*2)
-                p.drawEllipse(boxWidth-startX-radius*2, startY+height-radius*2+20, radius*2, radius*2)
-                p.drawEllipse(boxWidth-startX-width, startY+20, radius*2, radius*2)
-                p.drawEllipse(boxWidth-startX-width, startY+height-radius*2+20, radius*2, radius*2)
+                bubble = QRect(boxWidth-startX-width, startY+20, width, height)
+                p.drawRoundedRect(bubble, radius, radius)
                 p.setPen(QColor("#000000"))
-                for line in all_line:
-                    p.drawText(boxWidth-startX-width+width_border, startY+height_border+20+text_height, line)
-                    text_height += line_height
+                text_rect = bubble.adjusted(width_border, height_border, -width_border, -height_border)
+                p.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, "\n".join(all_line))
                 p.end()
 
             def showUserInfo(self):
                 cw = core.feachat.chatWindow.mainWindow
                 cw.close_content(); cw.set_content(cw.userInfoContent(cw, self.sender))
 
+            def relayout(self, width):
+                self.update()
+
         class leftTextBox(QWidget):
             def __init__(self, item, message_info):
                 super().__init__()
                 self.item = item
-                self.text_height = 21; self.font_size = 10; self.startX = 100; self.startY = 20
+                self.text_height = 21; self.font_size = 10; self.startX = 86; self.startY = 20
                 self.radius = 8; self.width_border = 15; self.height_border = 10; self.max_length = 400
                 self.text = message_info[5] if message_info[5] != "" else " "
                 self.sender = message_info[1]
@@ -334,46 +450,49 @@ class chatUi(QWidget):
                 self.avatarShow.clicked.connect(self.showUserInfo)
                 self.avatarShow.setStyleSheet("border-radius: 25px;border-image: url(%s);" % self.profile_picture)
                 self.nicknameShow = QLabel(self)
-                self.nicknameShow.resize(750 - self.startX, 30); self.nicknameShow.move(self.startX, 10)
+                self.nicknameShow.resize(message_area_width() - self.startX, 30); self.nicknameShow.move(self.startX, 10)
                 self.nicknameShow.setText(self.nickname); self.nicknameShow.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 self.nicknameShow.setStyleSheet("font-family: Microsoft YaHei;font-size: 16px;background-color: transparent;")
 
             def paintEvent(self, event):
-                text = self.text; text_height = self.text_height; font_size = self.font_size
+                text = self.text
                 startX = self.startX; startY = self.startY; radius = self.radius
-                width_border = self.width_border; height_border = self.height_border; max_length = self.max_length
-                font = QPainter(self); font.setFont(QFont("Microsoft YaHei", font_size))
+                width_border = self.width_border; height_border = self.height_border
+                boxWidth = message_area_width()
+                max_length = max(120, min(self.max_length, boxWidth - startX - 80))
+                self.nicknameShow.resize(max(120, boxWidth - self.startX - 20), 30)
+                font = QFont("Arial", 13)
+                metrics = QFontMetrics(font)
                 all_line = []; left, right = 0, 0
                 while left < len(text):
-                    while right <= len(text) and font.fontMetrics().boundingRect(text[left:right]).width() <= max_length:
+                    while right <= len(text) and metrics.boundingRect(text[left:right]).width() <= max_length:
                         right += 1
                     right -= 1; all_line.append(text[left:right]); left = right
-                line_height = font.fontMetrics().boundingRect(text).height()
-                width = min(max_length, font.fontMetrics().boundingRect(text).width()) + width_border * 2
+                line_height = metrics.height()
+                width = min(max_length, max(metrics.boundingRect(line).width() for line in all_line)) + width_border * 2
                 height = len(all_line) * line_height + height_border * 2
-                boxWidth, boxHeight = 750, height + startY * 2 + 20
+                boxHeight = height + startY * 2 + 20
                 self.resize(boxWidth, boxHeight); self.item.setSizeHint(QSize(boxWidth, boxHeight))
                 p = QPainter(self); brush = QBrush(Qt.SolidPattern)
-                p.setFont(QFont("Microsoft YaHei", font_size))
-                p.setPen(QColor("#dddddd")); brush.setColor(QColor("#dddddd")); p.setBrush(brush); p.begin(self)
+                p.setRenderHint(QPainter.Antialiasing)
+                p.setFont(font)
+                p.setPen(QColor("#dddddd")); brush.setColor(QColor("#dddddd")); p.setBrush(brush)
                 tri = QPolygon()
                 tri.setPoints(startX-10, startY+20, startX, startY+20, startX, startY+32)
                 p.drawPolygon(tri)
-                p.drawRect(startX+radius, startY+20, width-radius*2, height)
-                p.drawRect(startX, startY+radius+20, width, height-radius*2)
-                p.drawRect(startX, startY+20, radius*2, radius*2)
-                p.drawEllipse(startX, startY+height-radius*2+20, radius*2, radius*2)
-                p.drawEllipse(startX+width-radius*2, startY+20, radius*2, radius*2)
-                p.drawEllipse(startX+width-radius*2, startY+height-radius*2+20, radius*2, radius*2)
+                bubble = QRect(startX, startY+20, width, height)
+                p.drawRoundedRect(bubble, radius, radius)
                 p.setPen(QColor("#000000"))
-                for line in all_line:
-                    p.drawText(startX+width_border, startY+height_border+text_height+20, line)
-                    text_height += line_height
+                text_rect = bubble.adjusted(width_border, height_border, -width_border, -height_border)
+                p.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, "\n".join(all_line))
                 p.end()
 
             def showUserInfo(self):
                 cw = core.feachat.chatWindow.mainWindow
                 cw.close_content(); cw.content = cw.userInfoContent(cw, self.sender)
+
+            def relayout(self, width):
+                self.update()
 
         class rightFileBox(QWidget):
             def __init__(self, item, message_info):
@@ -623,10 +742,9 @@ class chatUi(QWidget):
         def __init__(self, parent, number):
             super().__init__(parent)
             self.number = number; self.chat_message = []
-            self.checked_message = len(core.feachat.all_message) if hasattr(core.feachat, "all_message") else 0
             self.loaded_message = 0
             self.loadMessage()
-            self.resize(750, 765); self.move(450, 75)
+            self.resize(600, 560); self.move(360, 64)
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -636,48 +754,56 @@ class chatUi(QWidget):
                                "QListWidget:Item:selected{background-color: transparent;}")
             self.show()
 
+        def relayout(self, x, y, width, height):
+            self.setGeometry(x, y, width, height)
+            for index in range(self.count()):
+                item = self.item(index)
+                widget = self.itemWidget(item)
+                if hasattr(widget, "relayout"):
+                    widget.relayout(width)
+                elif widget is not None:
+                    widget.update()
+            self.scrollToBottom()
+
         def loadMessage(self):
-            self.insert_message = 0
             all_message = core.feachat.all_message if hasattr(core.feachat, "all_message") else []
             account = core.feachat.account
-            while self.checked_message > 0 and self.insert_message < 50:
-                self.checked_message -= 1
-                msg = all_message[self.checked_message]
+            self.clear()
+            self.chat_message = []
+            for msg in all_message:
                 number = msg[2] if msg[1] == account else (msg[1] if msg[2] == account else msg[2])
                 if number == self.number:
-                    self.insert_message += 1
                     self.chat_message.append(msg)
-            for i in range(self.insert_message):
-                self.addBox(self.chat_message, self.loaded_message + i)
-            self.loaded_message += self.insert_message
+            self.chat_message = self.chat_message[-80:]
+            for i in range(len(self.chat_message)):
+                self.addBox(self.chat_message, i)
+            self.loaded_message = len(self.chat_message)
+            QTimer.singleShot(0, self.scrollToBottom)
 
         def addBox(self, message_info, index):
             account = core.feachat.account
             msg = message_info[index]
-            print(f"[addBox] account={account!r}, sender={msg[1]!r}, match={msg[1]==account}")
+            if index == 0 or compare_time(msg[3], message_info[index - 1][3]) > 300:
+                titem = QListWidgetItem()
+                self.addItem(titem)
+                self.setItemWidget(titem, self.timeBox(titem, msg[3]))
             item = QListWidgetItem()
             if msg[4] == "text":
-                self.insertItem(0, item)
+                self.addItem(item)
                 self.setItemWidget(item, self.rightTextBox(item, msg) if msg[1] == account else self.leftTextBox(item, msg))
             elif msg[4] == "file":
-                self.insertItem(0, item)
+                self.addItem(item)
                 self.setItemWidget(item, self.rightFileBox(item, msg) if msg[1] == account else self.leftFileBox(item, msg))
             elif msg[4] == "link":
-                self.insertItem(0, item)
+                self.addItem(item)
                 self.setItemWidget(item, self.rightLinkBox(item, msg) if msg[1] == account else self.leftLinkBox(item, msg))
             elif msg[4] == "emoji":
-                self.insertItem(0, item)
+                self.addItem(item)
                 self.setItemWidget(item, self.rightEmojiBox(item, msg) if msg[1] == account else self.leftEmojiBox(item, msg))
-            all_message = core.feachat.all_message if hasattr(core.feachat, "all_message") else []
-            if index == self.loaded_message + self.insert_message - 1 or (
-                    index + 1 < len(all_message) and compare_time(msg[3], all_message[index + 1][3]) > 300):
-                titem = QListWidgetItem()
-                self.insertItem(0, titem)
-                self.setItemWidget(titem, self.timeBox(titem, msg[3]))
+            self.scrollToBottom()
 
         def isTop(self):
-            if self.verticalScrollBar().value() == 0:
-                self.loadMessage()
+            pass
 
         def mouseReleaseEvent(self, event):
             core.feachat.chatWindow.mainWindow.retakeMore()
@@ -711,6 +837,16 @@ class chatUi(QWidget):
             self.mottoArea.setStyleSheet("font-family: Microsoft YaHei;font-size: 18px;color: #000000;background-color: transparent;")
             self.show()
 
+        def relayout(self, x, y, width, height):
+            self.setGeometry(x, y, width, height)
+            bg_h = min(230, max(170, int(height * 0.34)))
+            self.backgroundPictureArea.setGeometry(0, 0, width, bg_h)
+            avatar_size = 86
+            avatar_y = max(110, bg_h - 46)
+            self.profilePictureArea.setGeometry(56, avatar_y, avatar_size, avatar_size)
+            self.nicknameArea.setGeometry(160, avatar_y, max(120, width - 180), 46)
+            self.mottoArea.setGeometry(160, avatar_y + 58, max(120, width - 180), max(80, height - avatar_y - 70))
+
         def mouseReleaseEvent(self, event):
             core.feachat.chatWindow.mainWindow.retakeMore()
             super().mouseReleaseEvent(event)
@@ -735,11 +871,15 @@ class chatUi(QWidget):
         self.initAvatar()
         self.initSearchFilling(); self.initSearchIconArea(); self.initSearchIcon()
         self.initSearchBox(); self.initMoreButton(); self.initTitleText()
+        self.initMessageComposer()
+        self.initMessagePolling()
         self.titleText.setText("FeaChat")
         self.switchChats()
+        self.layoutUi()
 
     def initWindow(self):
-        self.width = 1200; self.height = 840; self.titleWidth = 1200; self.titleHeight = 75
+        self.width = 960; self.height = 680; self.minWidth = 840; self.minHeight = 560
+        self.titleWidth = self.width; self.titleHeight = 75
         self.resize(self.width, self.height)
         self.window.setWindowTitle("FeaChat")
         self.window.setWindowIcon(QIcon("pic/logo/logo.png"))
@@ -860,9 +1000,8 @@ class chatUi(QWidget):
         self.avatar.setScaledContents(True); self.avatar.setStyleSheet("background-color: transparent;")
 
     def initSearchFilling(self):
-        self.searchFilling = QLineEdit(self); self.searchFilling.resize(245, 40); self.searchFilling.move(130, 17)
-        self.searchFilling.setPlaceholderText("Search")
-        self.searchFilling.setStyleSheet("background-color: #e0e0e0;border: 0px;border-radius: 5px;font-family: Microsoft YaHei;font-size: 20px;color: #aaaaaa;")
+        self.searchFilling = QLabel(self); self.searchFilling.resize(275, 40); self.searchFilling.move(100, 17)
+        self.searchFilling.setStyleSheet("background-color: #e0e0e0;border: 0px;border-radius: 5px;")
 
     def initSearchIconArea(self):
         self.searchIconArea = QLabel(self); self.searchIconArea.resize(40, 40); self.searchIconArea.move(100, 17)
@@ -876,7 +1015,7 @@ class chatUi(QWidget):
     def initSearchBox(self):
         self.searchBox = QLineEdit(self); self.searchBox.resize(225, 40); self.searchBox.move(140, 17)
         self.searchBox.textChanged.connect(self.search); self.searchBox.setPlaceholderText("Search")
-        self.searchBox.setStyleSheet("background-color: transparent;border: 0px;font-family: Microsoft YaHei;font-size: 20px;")
+        self.searchBox.setStyleSheet("background-color: transparent;border: 0px;font-family: Arial;font-size: 18px;color: #222222;")
 
     def initMoreButton(self):
         self.moreButton = QPushButton(self); self.moreButton.resize(40, 40); self.moreButton.move(385, 17)
@@ -888,8 +1027,174 @@ class chatUi(QWidget):
         self.titleText = QLabel(self); self.titleText.resize(610, 75); self.titleText.move(480, 0)
         self.titleText.setStyleSheet("font-family: Microsoft YaHei;font-size: 30px;color: #000000;background-color: transparent;")
 
+    def initMessageComposer(self):
+        self.messageInput = QLineEdit(self)
+        self.messageInput.resize(620, 45)
+        self.messageInput.move(470, 780)
+        self.messageInput.setPlaceholderText("Type a message")
+        self.messageInput.returnPressed.connect(self.sendCurrentText)
+        self.messageInput.setStyleSheet("background-color: #ffffff;border: 1px solid #c7c7c7;border-radius: 5px;font-family: Arial;font-size: 16px;color: #111111;padding-left: 12px;selection-background-color: #b6d7ff;")
+        self.sendButton = QPushButton(self)
+        self.sendButton.resize(80, 45)
+        self.sendButton.move(1100, 780)
+        self.sendButton.setText("Send")
+        self.sendButton.clicked.connect(self.sendCurrentText)
+        self.sendButton.setStyleSheet("QPushButton{font-family: Microsoft YaHei;font-size: 18px;color: #ffffff;background-color: #0076F6;border: 0px;border-radius: 5px;}QPushButton:hover{background-color: #006bdf;}QPushButton:pressed{background-color: #0062cd;}QPushButton:disabled{background-color: #a9c9ee;}")
+        self.setComposerEnabled(False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.layoutUi()
+
+    def layoutUi(self):
+        width = self.size().width()
+        height = self.size().height()
+        menu_w = 68
+        list_w = max(280, min(330, int(width * 0.32)))
+        title_h = 64
+        composer_h = 58
+        content_x = menu_w + list_w
+        content_w = max(360, width - content_x)
+
+        self.width = width
+        self.height = height
+        self.titleWidth = width
+        self.titleHeight = title_h
+        self.menuWidth = menu_w
+        self.listWidth = list_w
+        self.contentX = content_x
+        self.contentW = content_w
+        self.contentTop = title_h
+        self.composerHeight = composer_h
+
+        if hasattr(self, "menuArea"):
+            self.menuArea.setGeometry(0, 0, menu_w, height)
+        if hasattr(self, "listArea"):
+            self.listArea.setGeometry(menu_w, 0, list_w, height)
+        if hasattr(self, "contentArea"):
+            self.contentArea.setGeometry(content_x, 0, content_w, height)
+        if hasattr(self, "avaterArea"):
+            self.avaterArea.setGeometry(0, 0, menu_w, title_h)
+        if hasattr(self, "searchArea"):
+            self.searchArea.setGeometry(menu_w, 0, list_w, title_h)
+        if hasattr(self, "titleArea"):
+            self.titleArea.setGeometry(content_x, 0, content_w, title_h)
+        if hasattr(self, "menuFilling"):
+            self.menuFilling.setGeometry(menu_w - 10, height - 10, 10, 10)
+        if hasattr(self, "contentFilling"):
+            self.contentFilling.setGeometry(content_x, 0, 10, height)
+        if hasattr(self, "avaterFilling1"):
+            self.avaterFilling1.setGeometry(menu_w - 10, 0, 10, title_h)
+        if hasattr(self, "avaterFilling2"):
+            self.avaterFilling2.setGeometry(0, title_h - 10, 10, 10)
+        if hasattr(self, "titleFilling1"):
+            self.titleFilling1.setGeometry(content_x, 0, 10, title_h)
+        if hasattr(self, "titleFilling2"):
+            self.titleFilling2.setGeometry(width - 10, title_h - 10, 10, 10)
+        if hasattr(self, "closeButton"):
+            self.closeButton.setGeometry(width - 50, 5, 42, 32)
+        if hasattr(self, "minButton"):
+            self.minButton.setGeometry(width - 96, 5, 42, 32)
+
+        nav_buttons = [
+            ("chatsButton", title_h),
+            ("contactsButton", title_h + menu_w),
+            ("momentsButton", title_h + menu_w * 2),
+            ("favoritesButton", title_h + menu_w * 3),
+            ("myselfButton", title_h + menu_w * 4),
+        ]
+        for name, y in nav_buttons:
+            if hasattr(self, name):
+                getattr(self, name).setGeometry(0, y, menu_w, menu_w)
+        bottom_buttons = ["fileManagerButton", "settingButton", "logOutButton"]
+        for offset, name in enumerate(bottom_buttons[::-1], start=1):
+            if hasattr(self, name):
+                getattr(self, name).setGeometry(0, max(title_h, height - menu_w * offset), menu_w, menu_w)
+        if hasattr(self, "avatar"):
+            avatar_size = 46
+            self.avatar.setGeometry((menu_w - avatar_size) // 2, (title_h - avatar_size) // 2, avatar_size, avatar_size)
+
+        search_x = menu_w + 18
+        search_w = max(160, list_w - 76)
+        if hasattr(self, "searchFilling"):
+            self.searchFilling.setGeometry(search_x, 14, search_w, 36)
+        if hasattr(self, "searchIconArea"):
+            self.searchIconArea.setGeometry(search_x, 14, 36, 36)
+        if hasattr(self, "searchIcon"):
+            self.searchIcon.setGeometry(search_x + 9, 23, 18, 18)
+        if hasattr(self, "searchBox"):
+            self.searchBox.setGeometry(search_x + 36, 14, max(80, search_w - 42), 36)
+        if hasattr(self, "moreButton"):
+            self.moreButton.setGeometry(menu_w + list_w - 50, 14, 36, 36)
+        if hasattr(self, "titleText"):
+            self.titleText.setGeometry(content_x + 24, 0, max(100, content_w - 130), title_h)
+            self.titleText.setStyleSheet("font-family: Arial;font-size: 24px;color: #000000;background-color: transparent;")
+
+        input_visible = hasattr(self, "messageInput") and self.messageInput.isVisible()
+        content_bottom = height - composer_h if input_visible else height
+        if hasattr(self, "messageInput"):
+            self.messageInput.setGeometry(content_x + 20, height - 48, max(120, content_w - 120), 38)
+        if hasattr(self, "sendButton"):
+            self.sendButton.setGeometry(width - 90, height - 48, 70, 38)
+
+        for layout in getattr(self, "list", []):
+            if isinstance(layout, self.expandMoreArea):
+                layout.setGeometry(menu_w + list_w - 208, title_h - 4, 200, 150)
+            else:
+                layout.setGeometry(menu_w, title_h, list_w, max(1, height - title_h))
+        if hasattr(self, "content") and self.content is not None:
+            if isinstance(self.content, self.messageContent):
+                self.content.relayout(content_x, title_h, content_w, max(1, content_bottom - title_h))
+            elif hasattr(self.content, "relayout"):
+                self.content.relayout(content_x, title_h, content_w, max(1, height - title_h))
+            else:
+                self.content.setGeometry(content_x, title_h, content_w, max(1, height - title_h))
+
+    def initMessagePolling(self):
+        self.messagePoller = QTimer(self)
+        self.messagePoller.timeout.connect(self.refreshMessages)
+        if not DEV_MODE:
+            self.messagePoller.start(2000)
+
+    def setComposerEnabled(self, enabled):
+        connected = DEV_MODE or getattr(core.feachat, "connect", False)
+        self.messageInput.setVisible(enabled)
+        self.sendButton.setVisible(enabled)
+        self.messageInput.setEnabled(enabled and connected)
+        self.sendButton.setEnabled(enabled and connected)
+        if not enabled:
+            self.messageInput.clear()
+        if enabled and not connected:
+            self.messageInput.setPlaceholderText("Server not connected")
+        else:
+            self.messageInput.setPlaceholderText("Type a message")
+
+    def sendCurrentText(self):
+        if "content" not in vars(self) or not isinstance(self.content, self.messageContent):
+            return
+        text = self.messageInput.text().strip()
+        if not text:
+            return
+        request = core.feachat.sendMessage(self.content.number, "text", text)
+        if request[0]:
+            self.messageInput.clear()
+            self.titleText.setText(core.feachat.user_info[self.content.number][0])
+            self.new_message(request[1])
+        else:
+            self.titleText.setText(f"Send failed: {request[1]}")
+
+    def refreshMessages(self):
+        old_ids = {msg[0] for msg in getattr(core.feachat, "all_message", [])}
+        request = core.feachat.getMessages()
+        if not request[0]:
+            return
+        for message in request[1]:
+            if message[0] not in old_ids:
+                self.new_message(message)
+
     def expandMore(self):
         self.moreFlag = True; self.more = self.expandMoreArea(self)
+        self.layoutUi()
         self.moreButton.setStyleSheet("QPushButton#moreButton{background-color: #b9b9b9;border: 0px;border-radius: 5px;border-image: url(pic/chatUi/more.png);}")
 
     def retakeMore(self):
@@ -917,23 +1222,29 @@ class chatUi(QWidget):
     def switchChats(self):
         self.page = "Chats"; self.setButtonStyle(); self.retakeMore(); self.close_list(); self.close_content()
         self.titleText.setText("Chats")
+        self.setComposerEnabled(False)
         self.set_list(self.chatList(self))
 
     def switchContacts(self):
         self.page = "Contacts"; self.setButtonStyle(); self.retakeMore(); self.close_list(); self.close_content()
         self.titleText.setText("Contacts")
+        self.setComposerEnabled(False)
+        self.set_list(self.contactList(self))
 
     def switchMoments(self):
         self.page = "Moments"; self.setButtonStyle(); self.retakeMore(); self.close_list(); self.close_content()
         self.titleText.setText("Moments")
+        self.setComposerEnabled(False)
 
     def switchFavorites(self):
         self.page = "Favourites"; self.setButtonStyle(); self.retakeMore(); self.close_list(); self.close_content()
         self.titleText.setText("Favourites")
+        self.setComposerEnabled(False)
 
     def switchMyself(self):
         self.page = "Myself"; self.setButtonStyle(); self.retakeMore(); self.close_list(); self.close_content()
         self.titleText.setText("Myself")
+        self.setComposerEnabled(False)
 
     def openSetting(self):
         from ui.dialogs import settingUi
@@ -978,25 +1289,43 @@ class chatUi(QWidget):
         for i in range(len(self.list) - 1, -1, -1):
             self.list[i].close(); del self.list[i]
 
-    def set_list(self, layout): self.list.append(layout)
+    def set_list(self, layout):
+        self.list.append(layout)
+        self.layoutUi()
     def remove_list(self): self.list[-1].close(); del self.list[-1]
     def close_content(self):
         if "content" in vars(self): self.content.close()
-    def set_content(self, layout): self.content = layout
+    def set_content(self, layout):
+        self.content = layout
+        self.setComposerEnabled(isinstance(layout, self.messageContent))
+        self.layoutUi()
 
     def new_message(self, message):
         import _thread, sys
         account = core.feachat.account
         user_info = core.feachat.user_info
         all_message = core.feachat.all_message if hasattr(core.feachat, "all_message") else []
+        if any(existing[0] == message[0] for existing in all_message):
+            return
         all_message.append(message)
-        if self.page == "Chats":
-            number = message[2] if message[1] == account else (message[1] if message[2] == account else message[2])
-            if number not in user_info:
-                user_info[number] = get_user_info(number)
-                download_file(user_info[number][1], "data"); download_file(user_info[number][2], "data")
-            if ("content" in vars(self) and str(type(self.content)) == "<class 'ui.chat_ui.chatUi.messageContent'>"
-                    and number == self.content.number):
+
+        number = message[2] if message[1] == account else (message[1] if message[2] == account else message[2])
+        if number not in user_info:
+            user_info[number] = get_user_info(number)
+            download_file(user_info[number][1], "data"); download_file(user_info[number][2], "data")
+
+        content_is_current_chat = (
+            "content" in vars(self)
+            and isinstance(self.content, self.messageContent)
+            and number == self.content.number
+        )
+        if content_is_current_chat:
+            self.content.chat_message.append(message)
+            self.content.addBox(self.content.chat_message, len(self.content.chat_message) - 1)
+            self.content.loaded_message += 1
+
+        if self.page == "Chats" and self.list and isinstance(self.list[0], self.chatList):
+            if content_is_current_chat:
                 if number in self.list[0].number_item:
                     item = self.list[0].number_item[number]
                     self.list[0].takeItem(self.list[0].row(item))
@@ -1004,9 +1333,6 @@ class chatUi(QWidget):
                 self.list[0].insertItem(0, item)
                 self.list[0].setItemWidget(item, self.list[0].chatsSelectBox(item, number, message))
                 self.list[0].setCurrentItem(self.list[0].number_item[number])
-                self.content.chat_message.insert(0, message)
-                self.content.addBox(self.content.chat_message, 0)
-                self.content.loaded_message += 1
             else:
                 notReceived = 0
                 if number in self.list[0].number_item:
@@ -1025,6 +1351,15 @@ class chatUi(QWidget):
 
 # 辅助函数（原来是全局函数，这里保留为模块级）
 import os, sys
+
+def message_area_width(default=600):
+    try:
+        cw = core.feachat.chatWindow.mainWindow
+        if hasattr(cw, "content") and isinstance(cw.content, chatUi.messageContent):
+            return max(360, cw.content.viewport().width())
+        return max(360, getattr(cw, "contentW", default))
+    except Exception:
+        return default
 
 def set_time(datetime):
     return datetime  # placeholder，正式版由服务器逻辑实现

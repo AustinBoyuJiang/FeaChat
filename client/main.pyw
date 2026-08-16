@@ -11,7 +11,7 @@ from ui.login_ui import loginUi
 
 if __name__ == "__main__":
     if not DEV_MODE:
-        core.feachat.connectServer(core.feachat.ipAddress, 8888)
+        core.feachat.connectServer(core.SERVER_HOST, core.SERVER_PORT)
         core.feachat.request("connect", core.feachat.hostname, core.feachat.macAddress)
 
     core.feachat.loginWindow = uiShadow(loginUi)

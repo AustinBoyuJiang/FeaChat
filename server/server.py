@@ -1,16 +1,21 @@
 import socket
 import threading
 
-import database
-from client_handler import ClientHandler
-from config import SOCKET_PORT, CLIENT_MAXIMUM
+try:
+    from . import database
+    from .client_handler import ClientHandler
+    from .config import SOCKET_HOST, SOCKET_PORT, CLIENT_MAXIMUM
+except ImportError:
+    import database
+    from client_handler import ClientHandler
+    from config import SOCKET_HOST, SOCKET_PORT, CLIENT_MAXIMUM
 
 
 class SocketServer:
     def __init__(self):
         self.db = database.get_connection()
         self.clients: dict = {}
-        self.ip_address = socket.gethostname()
+        self.ip_address = SOCKET_HOST
         self.port = SOCKET_PORT
         self._running = False
 

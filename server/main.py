@@ -1,8 +1,18 @@
 import sys
-import database
-from server import SocketServer
 
-if __name__ == "__main__":
+try:
+    from . import database
+    from .server import SocketServer
+except ImportError:
+    import database
+    from server import SocketServer
+
+
+def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("Usage: python -m server [--init|--clear]")
+        return
+
     srv = SocketServer()
 
     # Pass --init to reset the database, --clear to wipe data only
@@ -15,3 +25,7 @@ if __name__ == "__main__":
 
     srv.build()
     srv.listen()
+
+
+if __name__ == "__main__":
+    main()
